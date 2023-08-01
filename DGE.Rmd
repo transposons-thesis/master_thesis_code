@@ -4,7 +4,7 @@ author: "F. Rivetti"
 date: "2023-07-21"
 output: html_document
 ---
-
+This file details the code used for the differential gene analysis conducted in this thesis. 
 ```{r setup, include=FALSE}
 library(DESeq2)
 library(tidyverse)
