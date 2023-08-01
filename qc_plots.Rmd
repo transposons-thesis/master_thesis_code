@@ -4,7 +4,7 @@ author: "F. Rivetti"
 date: "2023-06-15"
 output: html_document
 ---
-
+This code explains how to produce all the QC plots necessary to analyse the data. 
 ```{r setup, include=FALSE}
 library(tidyverse)
 library(Seurat)
@@ -20,7 +20,7 @@ library(gridExtra)
 library(dynamicTreeCut)
 
 # load previously made RDS file
-sce_original <- readRDS("/Users/francescorivetti/Desktop/cello/sam_unpro/data/SCE_full.rds")
+sce_original <- readRDS("PATH/SCE_full.rds")
 ```
   
 ### Which genes?  
@@ -131,7 +131,8 @@ ggarrange(plot_1, plot_2,
   
 ### Mappability
 ```{r Mappability}
-exp_notexp <- readRDS("/Users/francescorivetti/exp_notexp.rds")
+# from the annotor.Rmd file
+exp_notexp <- readRDS("/PATH/exp_notexp.rds")
 # remove non-TEs
 exp_notexp <- exp_notexp[exp_notexp$Class == 'LINE' | exp_notexp$Class == 'SINE' | exp_notexp$Class == 'LTR',]
 exp_notexp <- exp_notexp[exp_notexp$Family != 'Penelope' & exp_notexp$Family != 'Dong-R4' & exp_notexp$Family != 'CR1' & exp_notexp$Family != 'RTE-X' & exp_notexp$Family != 'Alu' & exp_notexp$Family != 'SINE' &  exp_notexp$Family != 'RTE-BovB' ,]
@@ -174,7 +175,8 @@ ggplot(df_exp) +
 
 ### Mappability LINE-1s
 ```{r Mappability LINE-1s}
-exp_notexp <- readRDS("/Users/francescorivetti/exp_notexp.rds")
+# from the annnotator.Rmd file
+exp_notexp <- readRDS("/PATH/exp_notexp.rds")
 # only get LINE-1s
 exp_notexp <- exp_notexp[exp_notexp$Family == 'L1' ,]
 
