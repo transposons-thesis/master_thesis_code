@@ -1,0 +1,1083 @@
+---
+title: "specific_sc_analysis"
+author: "F. Rivetti"
+date: "2023-06-13"
+output: html_document
+---
+```{r message = FALSE}
+library(tidyverse)
+library(Seurat)
+library(reshape2)
+library(scater)
+library(scuttle)
+library(scran)
+library(cluster)
+library(ggplot2)
+library(SingleCellExperiment)
+library(BiocSingular)
+library(gridExtra)
+library(dynamicTreeCut)
+
+# load previously made RDS file
+sce_original <- readRDS("/Users/francescorivetti/Desktop/cello/sam_unpro/data/SCE_full.rds")
+
+LINE_1_insertion <- c("cell_1","cell_2", "cell_13", "cell_14", "cell_25", "cell_26", "cell_37", "cell_38", "cell_49", "cell_50", "cell_62", "cell_73", "cell_74", "cell_85", "cell_86") 
+Control <- c("cell_3","cell_4", "cell_15", "cell_16", "cell_27", "cell_28", "cell_39", "cell_40", "cell_51", "cell_52", "cell_63", "cell_64", "cell_75", "cell_76", "cell_87", "cell_88") 
+```
+
+---
+title: "specific_sc_analysis"
+author: "F. Rivetti"
+date: "2023-06-13"
+output: html_document
+---
+```{DGE}
+DGE_sc <- sce_original
+
+DGEs <- FindMarkers(DGE_sc, cells.1= LINE_1_insertion, cells.2 = Control, test.use = 'DESeq2')
+DGEs <- FindMarkers(DGE_sc, cells.1= LINE_1_insertion, cells.2 = Control, test.use = 'DESeq2',  min.pct = 0)
+# No features pass min.pct threshold; returning empty data.frame
+
+```
+
+## All LINE-1s
+
+```{r L1s}
+# % in % is the same as == & == &
+# Make subset
+sce_L1s <- sce_original[rowData(sce_original)$Family == "L1", ]
+
+# View all line subfamilies present
+unique(rowData(sce_L1s)$Subfamily)
+
+sce_L1s_full <- runPCA(sce_L1s, ncomponents=10,
+    exprs_values="logcounts", BSPARAM=BiocSingular::ExactParam())
+set.seed(1010)
+sce_L1s_full <- runTSNE(sce_L1s_full, dimred="PCA", perplexity=10)
+
+# Clustering
+my.dist <- dist(reducedDim(sce_L1s_full, "PCA"))
+my.tree <- hclust(my.dist, method="ward.D2")
+my.clusters <- unname(cutreeDynamic(my.tree, distM=as.matrix(my.dist),
+    minClusterSize=10, verbose=0))
+colLabels(sce_L1s_full) <- factor(my.clusters)
+table(Cluster=colLabels(sce_L1s_full))
+
+plotTSNE(sce_L1s_full, colour_by="Exp_setup", shape_by="label") + ggtitle("t-SNE of LINE-1 expression")
+
+gridExtra::grid.arrange(
+    plotTSNE(sce_L1s_full, colour_by="label") + ggtitle("t-SNE by cluster"), 
+    plotTSNE(sce_L1s_full, colour_by="Exp_setup") + ggtitle("t-SNE by experimental set-up"),
+    nrow=2
+)
+
+###################### Boxplots 
+# by set-up
+exp <- assays(sce_L1s_full)$logcounts[,c(1,2,3,6,7,8,12,13,17,18,21,24,25,28,29)]
+cont <- assays(sce_L1s_full)$logcounts[,c(4,5,9,10,11,14,15,16,19,20,22,23,26,27,30,31)]
+exp <- data.frame(apply(exp, MARGIN=1, FUN=mean))
+cont <- data.frame(apply(cont, MARGIN=1, FUN=mean))
+exp$Subfamily <- rowData(sce_L1s_full)$Subfamily
+cont$Subfamily <- rowData(sce_L1s_full)$Subfamily
+#exp <- exp[!exp$Class == "Gene" & !exp$Class == "DNA" & !exp$Class == "Satellite",]
+#cont <- cont[!cont$Class == "Gene" & !cont$Class == "DNA" & !cont$Class == "Satellite",]
+
+
+# combined 
+colnames(exp)[1] <- 'exp'
+colnames(cont)[1] <- 'value'
+exp$control <- cont$value
+# filter by subfam
+# 
+reps <- c('L1Md_T', 'L1Md_F', 'L1MdA', 'L1MdF2', 'L1MdF3', 'L1VL1', 'L1Md_F')
+exp <- exp[exp$Subfamily %in% reps ,]
+df <- melt(exp)
+
+# Subfamily variable      value
+ggplot(df, aes(x= variable, y=value)) + 
+  geom_boxplot() + scale_y_continuous(trans = 'log2') +  facet_wrap(~Subfamily) 
+
+## 
+try <- melt(exp[exp$Subfamily=='L1Md_T',])
+library(ggstatsplot)
+ggbetweenstats(try, variable, value)
+
+
+###
+################# y- number of cells expressing it, x - numebr of cells 
+extracted_table <- data.frame(counts(sce_L1s))
+extracted_table$genes <- rownames(sce_L1s)
+extracted_table$subfamily <- rowData(sce_L1s)$Subfamily
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+# get numebr of cells expressing cells
+LINE_1_fam_binary <- apply(ifelse(LINE_1_insertion_df > 0, 1, 0), 1, sum)
+Control_fam_binary <- apply(ifelse(Control_df > 0, 1, 0), 1, sum)
+# melt
+sym <- LINE_1_fam_binary + Control_fam_binary 
+melt_LINE_1 <- melt(LINE_1_fam_binary)
+melt_Control <- melt(Control_fam_binary)
+# histogram
+melt_comp <- data.frame(LINE_1_insertion = melt_LINE_1$value, Control = melt_Control$value, Repeat = row.names(melt_LINE_1))
+melt_melt <- melt(melt_comp, by ='Repeat')
+
+ggplot(melt_melt, aes(value, fill = variable)) + geom_histogram(position = "stack") + ylab("Number of expressed repeats") + xlab("Number of cells expressing a particular repeat")  + xlim(0,16) + theme_bw() + scale_fill_manual(values = c("blue", "red")) # + scale_x_continuous(breaks = 0:16, labels = 0:16) + ggtitle("Repea")
+
+ggplot(melt_melt[melt_melt$value >0,], aes(value/ncol(sce_L1s_full)*100, fill = variable)) +
+  geom_histogram(position = "stack", stat = "count") +
+  labs(x = "Percentage of cells expressing a given repeat (%)",
+       y = "Number of repeats") + theme_bw() + scale_fill_manual(values = c("blue", "red"))
+
+# + xlim(0,60) 
+
+ggplot(melt_melt, aes(value, fill = variable)) +
+  geom_histogram(position = "stack", stat = "count") +
+  labs(x = "Number of cells expressing a given repeat",
+       y = "Number of repeats") + theme_bw() + theme_bw() + scale_fill_manual(values = c("#c6e5c4", "#1f7b1c"))# + xlim(0,60)
+
+molten_sym <- melt(sym)
+ggplot(molten_sym, aes(value/31*100)) + geom_histogram() + ylab("Number of expressed repeats") + xlab("Percentage of cells expressing a particular repeat") + theme_bw() # + scale_x_continuous(breaks = 0:16, labels = 0:16) + ggtitle("Repea")
+
+
+################### remove exp setup
+melt_melt_fam <- melt_melt %>%
+  dplyr::select(Repeat, value) %>%
+  dplyr::group_by(Repeat) %>%
+  dplyr::summarize(number = sum(value))
+
+########## calculate 10% number
+sum(melt_melt_fam$number <= 3) / nrow(melt_melt_fam) * 100
+################
+maajor_L1s_tup <- melt_melt_fam[melt_melt_fam$number >16,]
+maajor_L1s_tup <- maajor_L1s_tup$Repeat
+maajor_L1s
+
+a <- str_extract(string, "(.*?)(?=_chr)")
+
+##################
+####### how many repeats per cell
+extracted_table <- data.frame(counts(sce_L1s))
+extracted_table$genes <- rownames(sce_L1s)
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+# get numebr of repeats per cell
+LINE_1_fam_binary <- apply(ifelse(LINE_1_insertion_df > 0, 1, 0), 2, sum)
+Control_fam_binary <- apply(ifelse(Control_df > 0, 1, 0), 2, sum)
+
+# melt
+melt_LINE_1 <- melt(LINE_1_fam_binary)
+melt_LINE_1$set_up <- 'Insertion'
+melt_Control <- melt(Control_fam_binary)
+melt_Control$set_up <- 'Control'
+melt_melt <- rbind(melt_Control, melt_LINE_1)
+
+
+ggplot(melt_melt, aes(rownames(melt_melt), value, fill=set_up)) +  geom_bar(stat='identity') + theme_bw()
+
+library(ggpubr)
+ 
+shapiro.test(melt_melt$value[1:16])
+shapiro.test(melt_melt$value[17:31])
+t.test(melt_melt$value[1:16], melt_melt$value[17:31])
+
+ggplot(melt_melt, aes(y=value, x=set_up, fill=set_up)) + geom_boxplot() +  ylab("Number of LINE-1 repeats expressed per cell") + theme_bw()  + theme(legend.position='NONE') +xlab(NULL) + scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4"))#
+
+
+##################################################
+# get numebr of repeats per cell
+sce_TEs <- sce_original[rowData(sce_original)$Class != "DNA" & rowData(sce_original)$Class != "Satellite" & rowData(sce_original)$Class != "Gene", ]
+
+unique(rowData(sce_TEs)$Class)
+# ALL LINEs 
+
+extracted_table <- data.frame(logcounts(sce_TEs))
+extracted_table$genes <- rownames(sce_TEs)
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+LINE_1_fam_binary <- apply(ifelse(LINE_1_insertion_df > 0, 1, 0), 2, sum)
+Control_fam_binary <- apply(ifelse(Control_df > 0, 1, 0), 2, sum)
+
+# melt
+melt_LINE_1 <- melt(LINE_1_fam_binary)
+melt_LINE_1$set_up <- 'Insertion'
+melt_Control <- melt(Control_fam_binary)
+melt_Control$set_up <- 'Control'
+melt_melt <- rbind(melt_Control, melt_LINE_1)
+
+ggplot(melt_melt, aes(value, fill = variable)) + geom_histogram(position = "stack") + ylab("Number of expressed repeats") + xlab("Number of cells expressing a particular repeat")  + xlim(0,16) + theme_bw() # + scale_x_continuous(breaks = 0:16, labels = 0:16) + ggtitle("Repea")
+
+ggplot(melt_melt, aes(rownames(melt_melt), value, fill=set_up)) +  geom_bar(stat='identity') + theme_bw()
+
+library(ggpubr)
+
+ggplot(melt_melt, aes(y=value, x=set_up, fill=set_up)) + geom_boxplot()  + stat_compare_means(method='wilcox.test') + ylab("Number of LINE-1 repeats expressed per cell") + theme_bw()
+
+########################################
+##################################################
+# get numebr of repeats per cell
+# ALL 
+
+extracted_table <- data.frame(logcounts(sce_original))
+extracted_table$genes <- rownames(sce_original)
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+LINE_1_fam_binary <- apply(ifelse(LINE_1_insertion_df > 0, 1, 0), 2, sum)
+Control_fam_binary <- apply(ifelse(Control_df > 0, 1, 0), 2, sum)
+
+# melt
+melt_LINE_1 <- melt(LINE_1_fam_binary)
+melt_LINE_1$set_up <- 'Insertion'
+melt_Control <- melt(Control_fam_binary)
+melt_Control$set_up <- 'Control'
+melt_melt <- rbind(melt_Control, melt_LINE_1)
+
+ggplot(melt_melt, aes(value, fill = variable)) + geom_histogram(position = "stack") + ylab("Number of expressed repeats") + xlab("Number of cells expressing a particular repeat")  + xlim(0,16) + theme_bw() # + scale_x_continuous(breaks = 0:16, labels = 0:16) + ggtitle("Repea")
+
+ggplot(melt_melt, aes(rownames(melt_melt), value, fill=set_up)) +  geom_bar(stat='identity') + theme_bw()
+
+library(ggpubr)
+
+ggplot(melt_melt, aes(y=value, x=set_up, fill=set_up)) + geom_boxplot()  + stat_compare_means(method='wilcox.test') + ylab("Number of LINE-1 repeats expressed per cell") + theme_bw()
+
+```
+
+```{r L1 fams analysis }
+library(stringr)
+sce_L1s <- sce_original[rowData(sce_original)$Family == "L1", ]
+
+extracted_table <- data.frame(counts(sce_L1s))
+extracted_table$gene <- paste0(rowData(sce_L1s)$Subfamily, '-', rownames(sce_L1s))
+rownames(extracted_table) <- extracted_table$gene
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+# get numebr of cells expressing cells
+LINE_1_fam_binary <- apply(ifelse(LINE_1_insertion_df > 0, 1, 0), 1, sum)
+Control_fam_binary <- apply(ifelse(Control_df > 0, 1, 0), 1, sum)
+# melt
+sym <- LINE_1_fam_binary + Control_fam_binary 
+melt_LINE_1 <- melt(LINE_1_fam_binary)
+melt_Control <- melt(Control_fam_binary)
+# histogram
+melt_comp <- data.frame(LINE_1_insertion = melt_LINE_1$value, Control = melt_Control$value, Repeat = row.names(melt_LINE_1))
+melt_melt <- melt(melt_comp, by ='Repeat')
+
+melt_melt$exp_set_up <- melt_melt$variable
+
+ggplot(melt_melt[melt_melt$value>0,], aes(x = factor(value), fill=exp_set_up)) +
+  geom_histogram(stat = "count", position = "stack" ) +
+  labs(x = "Number of cells expressing a given repeat",
+       y = "Number of repeats") + theme_bw()  + theme(legend.position='top')
++legend('top')# + xlim(0,60)
+
+# subset a string till you find _chr
+sub_chr <- function(string) {
+  a <- str_extract(string, "(.*?)(?=-)")
+  return(a)
+}
+
+melt_melt$fam <- lapply(melt_melt$Repeat, sub_chr)
+
+df <- melt_melt %>%
+  dplyr::select(c('fam', 'variable', 'value'))
+
+######## top 10
+#############################FIX z groupn by fam adn var
+###### too many families, get ones that are on average expressed in 10% of cells
+df_by_fam <- df %>%
+  dplyr::filter(n() > 1) %>%
+  dplyr::group_by(fam) %>%
+  dplyr::summarize(mean_value = mean(value)) %>% 
+  dplyr::filter(mean_value > 3.7)
+
+fam_of_interest <- unique(df_by_fam$fam)
+length(fam_of_interest)
+df_fam_of_interest <- df[df$fam %in% fam_of_interest,]
+
+fams <- unlist((unique(df_fam_of_interest$fam)))
+
+new_data <- data.frame(
+  Name = '0',
+  C_s_s = 0,
+  C_s_v =  0,
+  I_s_s =0,
+  I_s_v = 0,
+  f_s = 0,
+  f_v = 0,
+  p_s= 0,
+  P_p =0,
+  P_v = 0,
+  w_s = 0,
+  w_v = 0)
+
+for (i in 1:length(fams)){ 
+  
+  ins <- df_fam_of_interest[df_fam_of_interest == fams[i] & df_fam_of_interest$variable == 'LINE_1_insertion',]$value
+
+  con <- df_fam_of_interest[df_fam_of_interest == fams[i] & df_fam_of_interest$variable == 'Control',]$value
+
+shap_in <- shapiro.test(ins)
+shap_c <- shapiro.test(con)
+
+f <- var.test(ins, con)
+
+t_ <- t.test(ins, con)
+w_ <- wilcox.test(ins,con)
+
+data1 <- data.frame(
+  Name = fams[i],
+  C_s_s = shap_c$statistic, 
+  C_s_v =  shap_c$p.value,
+  I_s_s = shap_in$statistic,
+  I_s_v = shap_in$p.value,
+  f_s = f$statistic,
+  f_v = f$p.value,
+  p_s= t_$statistic, 
+  P_p =t_$parameter, 
+  P_v = t_$p.value,
+  w_s = w_$statistic,
+  w_v = w_$p.value)
+
+new_data <- rbind(new_data, data1) }
+
+df_fam_of_interest$variable <- c(rep('Insertion',59),rep("Control", 59))
+# titles 
+gridExtra::grid.arrange(ggplot(df_fam_of_interest[df_fam_of_interest == 'L1MA5',], aes(x=variable, y=value, fill=variable)) +geom_boxplot() +theme_bw() +ylab(NULL) + xlab(NULL) + theme(legend.position='NONE') + ylim(0,16) + xlim(c('Control', 'Insertion')) +  scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4")),
+
+ggplot(df_fam_of_interest[df_fam_of_interest == 'L1MB5',], aes(x=variable, y=value, fill=variable)) +geom_boxplot() +theme_bw() +ylab('Number of cells expressing a given repeat') +ylab(NULL) + xlab(NULL) + theme(legend.position='NONE') + ylim(0,16) + xlim(c('Control', 'Insertion')) +  scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4")), 
+
+ggplot(df_fam_of_interest[df_fam_of_interest == 'L1MA7',], aes(x=variable, y=value, fill=variable)) +geom_boxplot() +theme_bw() +ylab('Number of cells expressing a given repeat') +ylab(NULL) + xlab(NULL) + theme(legend.position='NONE') + ylim(0,16) + xlim(c('Control', 'Insertion')) +  scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4")),
+
+ggplot(df_fam_of_interest[df_fam_of_interest == 'L1M4b',], aes(x=variable, y=value, fill=variable)) +geom_boxplot() +theme_bw() +ylab('Number of cells expressing a given repeat') +ylab(NULL) + xlab(NULL)+ theme(legend.position='NONE')+ ylim(0,16) + xlim(c('Control', 'Insertion')) +  scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4")),
+
+ggplot(df_fam_of_interest[df_fam_of_interest == 'L1MB1',], aes(x=variable, y=value, fill=variable)) +geom_boxplot() +theme_bw() +ylab('Number of cells expressing a given repeat') +ylab(NULL) + xlab(NULL) + theme(legend.position='NONE')+ ylim(0,16) + xlim(c('Control', 'Insertion')) +  scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4")),
+
+ggplot(df_fam_of_interest[df_fam_of_interest == 'L1ME3B',], aes(x=variable, y=value, fill=variable)) +geom_boxplot() +theme_bw() +ylab('Number of cells expressing a given repeat') +ylab(NULL) + xlab(NULL) + theme(legend.position='NONE')+ ylim(0,16) + xlim(c('Control', 'Insertion')) +  scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4")), 
+
+ggplot(df_fam_of_interest[df_fam_of_interest == 'L1ME2z',], aes(x=variable, y=value, fill=variable)) +geom_boxplot() +theme_bw() +ylab('Number of cells expressing a given repeat') +ylab(NULL) + xlab(NULL) + theme(legend.position='NONE')+ ylim(0,16) + xlim(c('Control', 'Insertion')) +  scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4")),
+
+ggplot(df_fam_of_interest[df_fam_of_interest == 'L1MD',], aes(x=variable, y=value, fill=variable)) +geom_boxplot() +theme_bw() +ylab('Number of cells expressing a given repeat') +ylab(NULL) + xlab(NULL) + theme(legend.position='NONE')+ ylim(0,16) + xlim(c('Control', 'Insertion')) +  scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4")),
+
+ggplot(df_fam_of_interest[df_fam_of_interest == 'L1ME4c',], aes(x=variable, y=value, fill=variable)) +geom_boxplot() +theme_bw() +ylab('Number of cells expressing a given repeat') +ylab(NULL) + xlab(NULL) + theme(legend.position='NONE')+ ylim(0,16) + xlim(c('Control', 'Insertion')) +  scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4")), 
+
+ggplot(df_fam_of_interest[df_fam_of_interest == 'L1ME3Cz',], aes(x=variable, y=value, fill=variable)) +geom_boxplot() +theme_bw() +ylab('Number of cells expressing a given repeat') +ylab(NULL) + xlab(NULL) + theme(legend.position='NONE')+ ylim(0,16) + xlim(c('Control', 'Insertion')) +  scale_fill_manual(values = c( "#1f7b1c", "#c6e5c4")), 
+  ncol=2, nrow=5
+)
+
+# L1Md_F, L1Md_T
+insertion <- c( "L1Md_F", "L1Md_T")
+df_insertion <- molten[molten$fam %in% insertion,]
+ggplot(df_insertion, aes(x=value)) +geom_histogram() +theme_bw() 
+
+
+```
+
+
+
+## Top 10% expressed LINE-1s
+
+```{r L1 10 percent}
+# Make subset
+sce_L1s <- sce_original[rowData(sce_original)$Family == "L1", ]
+chosen_hvgs <- getTopHVGs(sce_L1s, prop=0.1)
+
+# copy code block for all analyses
+sce_L1s_10 <- runPCA(sce_L1s, ncomponents=10, subset_row=chosen_hvgs, 
+    exprs_values="logcounts", BSPARAM=BiocSingular::ExactParam())
+set.seed(1010)
+sce_L1s_10 <- runTSNE(sce_L1s_10, dimred="PCA", perplexity=10)
+
+# Clustering
+my.dist <- dist(reducedDim(sce_L1s_10, "PCA"))
+my.tree <- hclust(my.dist, method="ward.D2")
+my.clusters <- unname(cutreeDynamic(my.tree, distM=as.matrix(my.dist),
+    minClusterSize=10, verbose=0))
+colLabels(sce_L1s_10) <- factor(my.clusters)
+table(Cluster=colLabels(sce_L1s_10))
+
+plotTSNE(sce_L1s_10, colour_by="Exp_setup", shape_by="label") + ggtitle("t-SNE of top 10% of all LINE-1s")
+
+gridExtra::grid.arrange(
+    plotTSNE(sce_L1s_10, colour_by="label") + ggtitle("t-SNE by cluster"), 
+    plotTSNE(sce_L1s_10, colour_by="Exp_setup") + ggtitle("t-SNE by experimental set-up"),
+    nrow=2
+)
+
+unmolten[unmolten$Repeat == '12_15191478_15197670_+',]
+
+```
+
+## Top 10% expressed LINE-1s
+
+```{r L1 10 percent}
+# Make subset
+sce_L1s <- sce_original[rowData(sce_original)$Family == "L1", ]
+chosen_hvgs <- getTopHVGs(sce_L1s, prop=0.1)
+
+# copy code block for all analyses
+sce_L1s_10 <- runPCA(sce_L1s, ncomponents=10, subset_row=chosen_hvgs, 
+    exprs_values="logcounts", BSPARAM=BiocSingular::ExactParam())
+set.seed(1010)
+sce_L1s_10 <- runTSNE(sce_L1s_10, dimred="PCA", perplexity=10)
+
+# Clustering
+my.dist <- dist(reducedDim(sce_L1s_10, "PCA"))
+my.tree <- hclust(my.dist, method="ward.D2")
+my.clusters <- unname(cutreeDynamic(my.tree, distM=as.matrix(my.dist),
+    minClusterSize=10, verbose=0))
+colLabels(sce_L1s_10) <- factor(my.clusters)
+table(Cluster=colLabels(sce_L1s_10))
+
+plotTSNE(sce_L1s_10, colour_by="Exp_setup", shape_by="label") + ggtitle("t-SNE of top 10% of all LINE-1s")
+
+gridExtra::grid.arrange(
+    plotTSNE(sce_L1s_10, colour_by="label") + ggtitle("t-SNE by cluster"), 
+    plotTSNE(sce_L1s_10, colour_by="Exp_setup") + ggtitle("t-SNE by experimental set-up"),
+    nrow=2
+)
+
+
+```
+
+## All young LINE-1s
+```{r young L1s}
+# Young lines = expressed lines?
+sce_L1s <- sce_original[rowData(sce_original)$Family == "L1", ]
+young_sce_L1s <- sce_L1s[rowData(sce_L1s)$mya < 1, ]
+max(rowData(sce_L1s)$mya)
+max(rowData(young_sce_L1s)$mya)
+
+# is this correct? - check paper 
+```
+
+## L1Md_Gf subfamily analysis 
+```{r  L1Md_F, L1Md_T} 
+sce_L1Md_Gf <- sce_original[rowData(sce_original)$Subfamily == "L1Md_Gf", ]
+# number of repeats detected
+length(sce_L1Md_Gf)
+
+rownames(sce_L1Md_Gf) <- c('L1Md_Gf_2_144963183_144966628', 'L1Md_Gf_9_38546638_38552174', 'L1Md_Gf_Y_998526_1000000')
+
+
+gridExtra::grid.arrange(
+  ggcells(sce_L1Md_Gf, aes(x=Exp_setup, y=L1Md_Gf_2_144963183_144966628))  + geom_jitter(height = 0), 
+  ggcells(sce_L1Md_Gf, aes(x=Exp_setup, y=L1Md_Gf_9_38546638_38552174))  + geom_jitter(height = 0),  
+  ggcells(sce_L1Md_Gf, aes(x=Exp_setup, y=L1Md_Gf_Y_998526_1000000))  + geom_jitter(height = 0),  top = "Expression of the L1Md_Gf subfamily members", 
+    nrow=3
+)
+
+## Bar charts 
+extracted_table <- data.frame(logcounts(sce_L1Md_Gf))
+extracted_table$genes <- rownames(sce_L1Md_Gf)
+
+LINE_1_insertion <- c("cell_1","cell_2", "cell_13", "cell_14", "cell_25", "cell_26", "cell_37", "cell_38", "cell_49", "cell_50", "cell_62", "cell_73", "cell_74", "cell_85", "cell_86") 
+Control <- c("cell_3","cell_4", "cell_15", "cell_16", "cell_27", "cell_28", "cell_39", "cell_40", "cell_51", "cell_52", "cell_63", "cell_64", "cell_75", "cell_76", "cell_87", "cell_88") 
+
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+LINE_1_insertion_df$genes <- rownames(sce_L1Md_Gf)
+Control_df$genes <- rownames(sce_L1Md_Gf)
+LINE_1_insertion_df <- melt(LINE_1_insertion_df)
+Control_df <- melt(Control_df)
+LINE_1_insertion_df$variable <- ('Insertion')
+Control_df$variable <- ('Control')
+melted_L1Md_Gf <- rbind(LINE_1_insertion_df, Control_df)
+
+ggplot(melted_L1Md_Gf, aes(value, fill = variable)) + geom_histogram(position = "stack") +  facet_wrap(~genes) + ylab("Number of cells expressing the transposon") + xlab("log2(counts/size factor)") + ggtitle("Expression pattern of the L1Md_Gf transposons")
+
+ggplot(melted_L1Md_Gf, aes(x=variable, y=value)) + geom_violin() +  facet_wrap(~genes) 
+variable
+# is this correct? - check paper 
+
+
+############### heatmap 
+plotHeatmap(sce_L1Md_Gf, features=rownames(sce_L1Md_Gf), order_columns_by="Exp_setup",
+    colour_columns_by=c("Exp_setup"),exprs_values = "logcounts",
+    center=TRUE, symmetric=TRUE, zlim=c(-5, 5)) 
+width = unit(0.5, "cm"), show_column_dend = FALSE)
+
+
+#  [1] "cell_1"  "cell_13" "cell_14" "cell_15" "cell_16" "cell_2"  "cell_25" "cell_26" "cell_27" "cell_28" "cell_3"  "cell_37" "cell_38" "cell_39"
+# [15] "cell_4"  "cell_40" "cell_49" "cell_50" "cell_51" "cell_52" "cell_62" "cell_63" "cell_64" "cell_73" "cell_74" "cell_75" "cell_76" "cell_85"
+# [29] "cell_86" "cell_87" "cell_88" "genes"
+
+#c(1,2,3,,6,7,8,)
+
+heatmap(as.matrix(extracted_table[1:31]), Rowv = NA, Colv = NA)
+legend("right", legend=c("min", "med", "max"),fill=heat.colors(2))
+```
+
+## L1Md_T subfamily analysis 
+```{r L1Md_T}
+sce_L1Md_T <- sce_original[rowData(sce_original)$Subfamily == "L1Md_T", ]
+# number of repeats detected
+length(sce_L1Md_T)
+
+sce_L1Md_T <- runPCA(sce_L1Md_T, ncomponents=10,
+    exprs_values="logcounts", BSPARAM=BiocSingular::ExactParam())
+set.seed(1010)
+sce_L1Md_T <- runTSNE(sce_L1Md_T, dimred="PCA", perplexity=10)
+
+# Clustering
+my.dist <- dist(reducedDim(sce_L1Md_T, "PCA"))
+my.tree <- hclust(my.dist, method="ward.D2")
+my.clusters <- unname(cutreeDynamic(my.tree, distM=as.matrix(my.dist),
+    minClusterSize=10, verbose=0))
+colLabels(sce_L1Md_T) <- factor(my.clusters)
+table(Cluster=colLabels(sce_L1Md_T))
+
+plotTSNE(sce_L1Md_T, colour_by="Exp_setup", shape_by="label") + ggtitle("t-SNE of LINE-1 expression")
+
+gridExtra::grid.arrange(
+    plotTSNE(sce_L1Md_T, colour_by="label") + ggtitle("t-SNE by cluster"), 
+    plotTSNE(sce_L1Md_T, colour_by="Exp_setup") + ggtitle("t-SNE by experimental set-up"),
+    nrow=2
+)
+
+rownames(sce_L1Md_T) <- paste("L1", rowData(sce_L1Md_T)$Start, rowData(sce_L1Md_T)$End, sep='_')
+
+
+extracted_table <- data.frame(logcounts(sce_L1Md_T))
+extracted_table$genes <- rownames(sce_L1Md_T)
+melt_data <- melt(extracted_table, id = c('genes'))
+melt_data$exp_set_up <- rep(sce_L1Md_T$Exp_setup, each=82)
+
+ggplot(melt_data, aes(x= exp_set_up, y=value)) + 
+  geom_violin() +  facet_wrap(~genes)
+
+############### heatmap 
+plotHeatmap(sce_L1Md_T, features=rownames(sce_L1Md_T), order_columns_by="Exp_setup",
+    colour_columns_by=c("Exp_setup"), exprs_values = "logcounts",
+    center=TRUE, symmetric=TRUE, zlim=c(-5, 5)) 
+
+
+#######
+
+
+LINE_1_insertion <- c("cell_1","cell_2", "cell_13", "cell_14", "cell_25", "cell_26", "cell_37", "cell_38", "cell_49", "cell_50", "cell_62", "cell_73", "cell_74", "cell_85", "cell_86") 
+
+Control <- c("cell_3","cell_4", "cell_15", "cell_16", "cell_27", "cell_28", "cell_39", "cell_40", "cell_51", "cell_52", "cell_63", "cell_64", "cell_75", "cell_76", "cell_87", "cell_88") 
+
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+values <- list()
+for (gene in 1:nrow(extracted_table)){
+  value <- t.test(LINE_1_insertion_df[gene,], Control_df[gene,])
+  p <- value$p.value
+  values <- append(values, p)
+}
+
+extracted_table$p_values <- values
+
+min(sapply(values, min))
+
+##############
+comparison <- data.frame(insertion = apply(LINE_1_insertion_df, 1, mean), control = apply(Control_df, 1, mean))
+comparison$transposons <- rownames(comparison)
+melted_comparison <- melt(comparison)
+
+
+ggplot(comparison, aes(x=control, y=insertion)) + geom_point() +   scale_y_continuous(trans = 'log10') + 
+  scale_x_continuous(trans = 'log10') 
+
+
+################# y- number of cells expressing it, x - numebr of cells 
+extracted_table <- data.frame(logcounts(sce_L1Md_T))
+extracted_table$genes <- rownames(sce_L1Md_T)
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+# get numebr of cells expressing cells
+LINE_1_fam_binary <- apply(ifelse(LINE_1_insertion_df > 0, 1, 0), 1, sum)
+Control_fam_binary <- apply(ifelse(Control_df > 0, 1, 0), 1, sum)
+# melt
+melt_LINE_1 <- melt(LINE_1_fam_binary)
+melt_Control <- melt(Control_fam_binary)
+# histogram
+melt_comp <- data.frame(exp = melt_LINE_1$value, control = melt_Control$value, row.names = row.names(melt_LINE_1))
+melt_melt <- melt(melt_comp)
+
+ggplot(melt_melt, aes(value, fill = variable)) + geom_histogram(position = "stack") + ylab("Number of cells") + xlab("Number of repeats") + ggtitle("Expression pattern of the L1Md_Gf transposons")
+
+```
+
+## Closest families: L1Md_F, L1Md_T
+```{r  L1Md_F, L1Md_T}
+TEs <- c('L1Md_F', 'L1Md_T')
+sce_closest <- sce_original[rowData(sce_original)$Subfamily %in%  TEs, ]
+# number of repeats detected length(sce_closest)
+# remove too lowly expressed genes
+sce_closest <- sce_closest[apply(counts(sce_closest), 1, mean) > 0.1, ]
+
+
+rownames(sce_closest) <- paste(rowData(sce_closest)$Subfamily,rowData(sce_closest)$Chromosome, rowData(sce_closest)$Start, sep='_')
+
+
+extracted_table <- data.frame(logcounts(sce_closest))
+extracted_table$genes <- rownames(sce_closest)
+melt_data <- melt(extracted_table, id = c('genes'))
+melt_data$exp_set_up <- rep(sce_closest$Exp_setup, each=(length(sce_closest)))
+
+ggplot(melt_data, aes(x= exp_set_up, y=value)) + 
+  geom_violin() +  facet_wrap(~genes)
+
+order <- c("cell_1","cell_2", "cell_13", "cell_14", "cell_25", "cell_26", "cell_37", "cell_38", "cell_49", "cell_50", "cell_62", "cell_73", "cell_74", "cell_85", "cell_86", "cell_3","cell_4", "cell_15", "cell_16", "cell_27", "cell_28", "cell_39", "cell_40", "cell_51", "cell_52", "cell_63", "cell_64", "cell_75", "cell_76", "cell_87", "cell_88") 
+
+order <- substring(order, 6)
+
+melt_data$cell <- substring(melt_data$variable, 6)
+############### heatmap 
+ggplot(melt_data, aes(cell, genes, fill=  value))  +   geom_tile(color = "black") + xlim(order) + 
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000" , midpoint = 5) +
+  coord_fixed() + theme(legend.position='top') + xlab('Control cells Insertion cells') +ylab('L1Md-F and L1Md-T repeats')  + theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank()) 
+
+
+# boxplot by fam all togeteher comparign L1MdA L1Md_T
+TEs <- c('L1Md_F', 'L1Md_T', 'L1Md_A')
+sce_closest <- sce_L1s[rowData(sce_L1s)$Subfamily %in%  TEs, ]
+# number of repeats detected length(sce_closest)
+# remove too lowly expressed genes
+# sce_closest <- sce_closest[apply(counts(sce_closest), 1, mean) > 0.1, ]
+
+
+rownames(sce_closest) <- paste(rowData(sce_closest)$Subfamily,rowData(sce_closest)$Chromosome, rowData(sce_closest)$Start, sep='_')
+
+
+extracted_table <- data.frame(logcounts(sce_closest))
+extracted_table$Subfamily <- rowData(sce_closest)$Subfamily
+  
+melt_data <- melt(extracted_table, id = c('Subfamily'))
+melt_data$exp_set_up <- rep(sce_closest$Exp_setup, each=(nrow(extracted_table)))
+
+ggplot(melt_data, aes(x= exp_set_up, y=value)) + 
+  geom_boxplot() +  facet_wrap(~Subfamily)
+
+```
+
+## Xsome 9
+
+```{r xsome 9}
+
+sce_9 <- sce_original[rowData(sce_original)$Chromosome == "9", ]
+### PCA 
+
+sce_9 <- runPCA(sce_9, ncomponents=10,
+    exprs_values="logcounts", BSPARAM=BiocSingular::ExactParam())
+set.seed(1010)
+sce_9 <- runTSNE(sce_9, dimred="PCA", perplexity=10)
+
+my.dist <- dist(reducedDim(sce_9, "PCA"))
+my.tree <- hclust(my.dist, method="ward.D2")
+my.clusters <- unname(cutreeDynamic(my.tree, distM=as.matrix(my.dist),
+    minClusterSize=10, verbose=0))
+colLabels(sce_9) <- factor(my.clusters)
+table(Cluster=colLabels(sce_9))
+
+plotTSNE(sce_9, colour_by="Exp_setup", shape_by="label") + ggtitle("t-SNE of chromosome 9")
+
+gridExtra::grid.arrange(
+    plotTSNE(sce_9, colour_by="label") + ggtitle("t-SNE by cluster"), 
+    plotTSNE(sce_9, colour_by="Exp_setup") + ggtitle("t-SNE by experimental set-up"),
+    nrow=2
+)
+
+## Heatmap
+markers <- findMarkers(sce_9, my.clusters)
+marker.set <- markers[["1"]]
+top.markers <- rownames(marker.set)[marker.set$Top <= 15]
+plotHeatmap(sce_9, features=top.markers, order_columns_by="Exp_setup",
+    colour_columns_by=c("Exp_setup"),
+    center=TRUE, symmetric=TRUE, zlim=c(-5, 5)) 
+
+## Bar charts 
+extracted_table <- data.frame(logcounts(sce_9))
+extracted_table$genes <- rownames(sce_9)
+melt_data <- melt(extracted_table, id = c('genes'))
+melt_data$exp_set_up <- rep(sce_9$Exp_setup, each=nrow(extracted_table))
+
+ggplot(melt_data, aes(x= exp_set_up, y=value)) + 
+  geom_violin() +  facet_wrap(~genes) 
+
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+values <- list()
+for (gene in 1:nrow(extracted_table)){
+  value <- t.test(LINE_1_insertion_df[gene,], Control_df[gene,])
+  p <- value$p.value
+  values <- append(values, p)
+}
+
+extracted_table$p_values <- unlist(values, recursive = TRUE)
+
+## Sig bar charts 
+rownames(extracted_table)[c(which(extracted_table$p_values < 0.05))]
+
+sig_extracted_table <- extracted_table[c(which(extracted_table$p_values < 0.05)), ]
+sig_extracted_table <- select(sig_extracted_table, - p_values)
+melt_data <- melt(sig_extracted_table, id = c('genes'))
+melt_data$exp_set_up <- rep(sce_9$Exp_setup, each=nrow(sig_extracted_table))
+
+ggplot(melt_data, aes(x= exp_set_up, y=value)) + 
+  facet_wrap(~genes) + geom_boxplot()
+
+
+# distance from insertion
+# nothign over insertion, otherwise following code is wrong
+# insertion 21457136
+dist <- data.frame(abs(rowData(sce_9)$Start - 21457136), abs(rowData(sce_9)$End - 21457136))
+extracted_table$Dist <- apply(dist, MARGIN=1, FUN = min) # add closest point
+
+
+ggplot(extracted_table, aes(x=Dist, y=log(p_values))) + geom_point() + geom_hline(yintercept=log(0.05/nrow(extracted_table)))
+
+ggplot(extracted_table, aes(x=Dist, y=p_values)) + geom_point() + geom_hline(yintercept=0.05/nrow(extracted_table)) + scale_y_continuous(trans='log')
+
+
+################### Wilcox
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+
+values <- list()
+for (gene in 1:nrow(extracted_table)){
+  value <- wilcox.test(unlist(LINE_1_insertion_df[gene,]), unlist(Control_df[gene,]))
+  w <- value$p.value
+  values <- append(values, w)
+}
+
+extracted_table$w_values <- unlist(values, recursive = TRUE)
+dist <- data.frame(abs(rowData(sce_9)$Start - 21457136), abs(rowData(sce_9)$End - 21457136))
+extracted_table$Dist <- apply(dist, MARGIN=1, FUN = min) # add closest point
+
+ggplot(extracted_table, aes(x=Dist, y=log(w_values))) + geom_point() + geom_hline(yintercept=log(0.05/nrow(extracted_table)))
+
+
+
+
+library(waddR)
+# split into controls vs experimental 
+exp <- assays(sce_9)$logcounts[,c(1,2,3,6,7,8,12,13,17,18,21,24,25,28,29)]
+cont <- assays(sce_9)$logcounts[,c(4,5,9,10,11,14,15,16,19,20,22,23,26,27,30,31)]
+
+# control: 
+# res <- wasserstein.sc(exp, cont, method = c("TS", "OS"), permnum=1000,seed=24)
+
+
+# dat <- cbind(exp, cont)
+# condition <- c(rep(1, 15), rep(2, 16))
+# res <- wasserstein.sc(dat, condition, seed=123)
+
+```
+
+
+```{r TIGRE locus}
+
+sce_9 <- sce_original[rowData(sce_original)$Chromosome == "9", ]
+sce_9_tigre <- sce_9[rowData(sce_9)$Start > 20456628 & rowData(sce_9)$End < 22456635, ]
+
+### PCA 
+
+sce_9_tigre <- runPCA(sce_9_tigre, ncomponents=10,
+    exprs_values="logcounts", BSPARAM=BiocSingular::ExactParam())
+set.seed(1010)
+sce_9_tigre <- runTSNE(sce_9_tigre, dimred="PCA", perplexity=10)
+
+my.dist <- dist(reducedDim(sce_9_tigre, "PCA"))
+my.tree <- hclust(my.dist, method="ward.D2")
+my.clusters <- unname(cutreeDynamic(my.tree, distM=as.matrix(my.dist),
+    minClusterSize=10, verbose=0))
+colLabels(sce_9_tigre) <- factor(my.clusters)
+table(Cluster=colLabels(sce_9_tigre))
+
+plotTSNE(sce_9_tigre, colour_by="Exp_setup", shape_by="label") + ggtitle("t-SNE of TIGRE locus")
+
+gridExtra::grid.arrange(
+    plotTSNE(sce_9_tigre, colour_by="label") + ggtitle("t-SNE by cluster"), 
+    plotTSNE(sce_9_tigre, colour_by="Exp_setup") + ggtitle("t-SNE by experimental set-up"),
+    nrow=2
+)
+
+ggplot(p_dist, aes(x=distance/1000, y=-log10(p))) + geom_point() + geom_hline(yintercept=signifcance, linetype = "dotted") + ylab("-log10(p-value)") + xlab('Distance (kb) from LINE-1 insertion') + geom_text(x = 770, y = signifcance -0.1, label = "Bonferroni-corrected p-value, 0.05/99") + theme_bw( ) + geom_vline(xintercept=-10, linetype = "dotted", color='red') + geom_vline(xintercept=10, linetype = "dotted", color = 'red') # + ggtitle("p-value of t-test comparing gene expression in control vs. LINE-1 insertion on the TIGRE locus")
+
+## Heatmap
+markers <- findMarkers(sce_9_tigre, my.clusters)
+marker.set <- markers[["1"]]
+top.markers <- rownames(marker.set)
+plotHeatmap(sce_9_tigre, features=top.markers, order_columns_by="Exp_setup",
+    colour_columns_by=c("Exp_setup"),
+    center=TRUE, symmetric=TRUE, zlim=c(-5, 5)) 
+
+## Bar charts 
+extracted_table <- data.frame(logcounts(sce_9_tigre))
+extracted_table$genes <- rownames(sce_9_tigre)
+melt_data <- melt(extracted_table, id = c('genes'))
+melt_data$exp_set_up <- rep(sce_9_tigre$Exp_setup, each=nrow(extracted_table))
+
+#ggplot(melt_data, aes(x= exp_set_up, y=value)) + 
+ # geom_violin() +  facet_wrap(~genes) 
+
+LINE_1_insertion <- c("cell_1","cell_2", "cell_13", "cell_14", "cell_25", "cell_26", "cell_37", "cell_38", "cell_49", "cell_50", "cell_62", "cell_73", "cell_74", "cell_85", "cell_86") 
+
+Control <- c("cell_3","cell_4", "cell_15", "cell_16", "cell_27", "cell_28", "cell_39", "cell_40", "cell_51", "cell_52", "cell_63", "cell_64", "cell_75", "cell_76", "cell_87", "cell_88") 
+
+
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+values <- list()
+for (gene in 1:nrow(extracted_table)){
+  value <- t.test(LINE_1_insertion_df[gene,], Control_df[gene,])
+  p <- value$p.value
+  values <- append(values, p)
+}
+
+extracted_table$p_values <- unlist(values, recursive = TRUE)
+
+## Sig bar charts 
+rownames(extracted_table)[c(which(extracted_table$p_values < 0.05))]
+
+sig_extracted_table <- extracted_table[c(which(extracted_table$p_values < 0.05)), ]
+sig_extracted_table <- sig_extracted_table[,1:32]
+melt_data <- melt(sig_extracted_table, id = c('genes'))
+melt_data$exp_set_up <- rep(sce_9_tigre$Exp_setup, each=nrow(sig_extracted_table))
+
+ggplot(melt_data, aes(x= exp_set_up, y=value)) + 
+  facet_wrap(~genes) + geom_boxplot()
+
+
+#### ignore 
+
+p <- c(unlist(values, recursive = TRUE)) 
+dist <- data.frame(rowData(sce_9_tigre)$Start - 21456632, rowData(sce_9_tigre)$End - 21456632)
+
+distance <- apply(dist, 1, function(x) {
+  if (x[1] > 0) {
+    return(min(x))
+  } else {
+    return(max(x))
+  }
+})
+
+p_dist <- data.frame(p, distance)
+
+signifcance <- -log10(0.05/nrow(sce_9_tigre))
+ggplot(p_dist, aes(x=distance/1000, y=-log10(p))) + geom_point() + geom_hline(yintercept=signifcance, linetype = "dotted") + ylab("-log10(p-value)") + xlab('Distance (kb) from LINE-1 insertion') + geom_text(x = 770, y = signifcance -0.1, label = "Bonferroni-corrected p-value") + theme_bw( ) + geom_vline(xintercept=-10, linetype = "dotted", color='red') + geom_vline(xintercept=10, linetype = "dotted", color = 'red') # + ggtitle("p-value of t-test comparing gene expression in control vs. LINE-1 insertion on the TIGRE locus")
+
+# + ylim(-3.5,NA) 
+
+
+#### Wilcox 
+
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+values <- list()
+for (gene in 1:nrow(extracted_table)){
+  value <- wilcox.test(unlist(LINE_1_insertion_df[gene,]), unlist(Control_df[gene,]))
+  w <- value$p.value
+  values <- append(values, w)
+}
+
+extracted_table$w_values <- unlist(values, recursive = TRUE)
+
+w <- c(unlist(values, recursive = TRUE))
+dist <- data.frame(abs(rowData(sce_9_tigre)$Start - 21457136), abs(rowData(sce_9_tigre)$End - 21457136))
+dist <- apply(dist, MARGIN=1, FUN = min) # add closest point
+
+w_dist <- data.frame(w, dist)
+
+ggplot(w_dist, aes(x=dist, y=w)) + geom_point() + geom_hline(yintercept=0.05/nrow(extracted_table)) + scale_y_continuous(trans='log')
+
+
+w_dist$gene <-  rownames(extracted_table)
+
+
+## closest genes 
+# AB124611 9_21457977_21458126_+ Carm1
+sce_closests <- sce_original[rownames(sce_original) == "AB124611" | rownames(sce_original) == "9_21457977_21458126_+" | rownames(sce_original) == "Carm1" , ]
+
+w_closest <- w_dist[w_dist$gene == 'AB124611' | w_dist$gene == '9_21457977_21458126_+' | w_dist$gene == 'Carm1' ,]
+
+extracted_table <- data.frame(logcounts(sce_closests))
+extracted_table$genes <- rownames(sce_closests)
+melt_data <- melt(extracted_table, id = c('genes'))
+melt_data$exp_set_up <- rep(sce_closests$Exp_setup, each=nrow(extracted_table))
+
+library(ggpubr)
+
+ggplot(melt_data, aes(x= exp_set_up, y=value, fill=exp_set_up)) + 
+  geom_boxplot() +  facet_wrap(~genes)+ stat_compare_means(method = "t.test") + theme_bw() +ylab('log2(count/size_factor') + scale_y_continuous(trans = 'log2')  +xlab('')
+
+ggplot(melt_data, aes(x= exp_set_up, y=value, fill=exp_set_up)) + 
+  geom_point() +  facet_wrap(~genes)+ stat_compare_means(method = "t.test") + theme_bw() +ylab('log2(count/size_factor') + scale_y_continuous(trans = 'log2')  +xlab('')
+
+
+
+```
+
+
+```{r DGE}
+##### no replicates so no pseudo bulk DGE
+library(DESeq2)
+
+bulk_sce <- sce_original
+######### separate experimental set-ups
+LINE_1_insertion <- c("cell_1","cell_2", "cell_13", "cell_14", "cell_25", "cell_26", "cell_37", "cell_38", "cell_49", "cell_50", "cell_62", "cell_73", "cell_74", "cell_85", "cell_86") 
+Control <- c("cell_3","cell_4", "cell_15", "cell_16", "cell_27", "cell_28", "cell_39", "cell_40", "cell_51", "cell_52", "cell_63", "cell_64", "cell_75", "cell_76", "cell_87", "cell_88") 
+# get all genes
+extracted_table <- data.frame(counts(bulk_sce))
+# separate into two dataframes and average columns
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+##############################################
+# DESEQ2 
+condition <- unique(bulk_sce$Exp_setup)
+coldata <- data.frame(cell_num = colnames(extracted_table), condition = bulk_sce$Exp_setup)
+######
+sum_not_0 <- function(list) {
+  sum(list!=0)
+}
+summary <- data.frame(apply(extracted_table, 1, sum_not_0))
+summary$a <- "a"
+summary_10 <- summary[summary$apply.extracted_table..1..sum_not_0. > 20, ]
+genes_to_keep <- data.frame(rownames(summary_10))
+
+
+# create Deseq object and run DGE
+dds <- DESeqDataSetFromMatrix(countData = extracted_table, colData = coldata, design = ~ condition)
+# count how many 0s
+
+dds <- DESeq(dds)
+# visualize plotDispEsts(dds)
+# output results
+res <- results(dds, alpha = 0.05)
+res_tbl <- res %>%
+        data.frame() %>%
+        rownames_to_column(var="gene") %>%
+        as_tibble()
+
+p_cutoff <- 0.5/28634
+# Subset the significant results
+sig_res <- dplyr::filter(res_tbl, pvalue < p_cutoff) %>%
+        dplyr::arrange(pvalue)
+
+colnames(genes_to_keep)[colnames(genes_to_keep) == "rownames.summary_10."] <- "gene"
+
+acc_sig_res <- inner_join(genes_to_keep, sig_res, by='gene')
+
+#################### Volcano plot
+## Obtain logical vector where TRUE values denote padj values < 0.05 and fold change > 1.5 in either direction
+res_table_thres <- res_tbl %>% 
+                  mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+ggplot(res_table_thres) +
+    geom_point(aes(x = log2FoldChange, y = -log10(padj), colour = threshold)) +
+    xlab("log2 fold change") + 
+    ylab("-log10 adjusted p-value") +
+    theme(legend.position = "right",
+          plot.title = element_text(size = rel(1.5), hjust = 0.5),
+          axis.title = element_text(size = rel(1.25))) + theme_bw()   
+# scale_y_continuous(limits = c(0,50)) +
+
+
+######################################
+## ggplot of top genes
+normalized_counts <- counts(dds, 
+                         normalized = TRUE)
+## Order results by padj values
+top20_sig_genes <- acc_sig_res %>%
+        dplyr::arrange(padj) %>%
+        dplyr::pull(gene) %>%
+        head(n=27)
+
+top20_sig_norm <- data.frame(normalized_counts) %>%
+        rownames_to_column(var = "gene") %>%
+        dplyr::filter(gene %in% top20_sig_genes)
+
+gathered_top20_sig <- top20_sig_norm %>%
+        gather(colnames(top20_sig_norm)[2:length(colnames(top20_sig_norm))], key = "samplename", value = "normalized_counts")
+gathered_top20_sig$condition <-  rep(bulk_sce$Exp_setup, each=27)       
+
+## scatter plot 
+ggplot(gathered_top20_sig) +
+        geom_point(aes(x = gene, 
+                       y = normalized_counts, 
+                       color = condition), 
+                   position=position_jitter(w=0.1,h=0)) +
+        scale_y_log10() +
+        xlab("Genes") +
+        ylab("log10 Normalized Counts") +
+        ggtitle("Top 20 Significant DE Genes") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+        theme(plot.title = element_text(hjust = 0.5)) 
+
+ggplot(gathered_top20_sig) +
+        geom_boxplot(aes(x = gene, 
+                       y = normalized_counts, 
+                       color = condition)) +
+        scale_y_log10() +
+        xlab("Genes") +
+        ylab("log10 Normalized Counts") +
+        ggtitle("Top 20 Significant DE Genes") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+        theme(plot.title = element_text(hjust = 0.5))  
+
+
+################## Heat map
+library(RColorBrewer)
+library(pheatmap)
+# Extract normalized counts for only the significant genes
+sig_norm <- data.frame(normalized_counts) %>%
+        rownames_to_column(var = "gene") %>%
+        dplyr::filter(gene %in% sig_res$gene)
+        
+# Set a color palette
+heat_colors <- brewer.pal(6, "YlOrRd")
+
+# order cells 
+LINE_1_insertion_df <- dplyr::select(sig_norm, LINE_1_insertion)
+Control_df <- dplyr::select(sig_norm, Control)
+ordered <- cbind(LINE_1_insertion_df, Control_df)
+# Run pheatmap using the metadata data frame for the annotation
+pheatmap(ordered, 
+    #color = heat_colors, 
+    cluster_rows = T, 
+    show_rownames = F,
+    border_color = NA, 
+    fontsize = 10, 
+    scale = "row", 
+    fontsize_row = 10, 
+    height = 20, cluster_cols = FALSE)  
+
+pheatmap(sig_norm[ , 2:length(colnames(sig_norm))], 
+    color = heat_colors, 
+    cluster_rows = T, 
+    show_rownames = F,
+    border_color = NA, 
+    fontsize = 10, 
+    scale = "row", 
+    fontsize_row = 10, 
+    height = 20)   
+
+
+
+############################# SIG TRANSPOSONS
+tran_sig <- acc_sig_res[1:17,]
+
+colnames(tran_sig)[colnames(tran_sig) == "gene"] <- "Feature"
+DE_TE <- inner_join(tran_sig, new_annotations, by=('Feature'))
+
+
+
+```
+
