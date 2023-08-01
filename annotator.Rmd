@@ -4,19 +4,15 @@ author: "F. Rivetti"
 date: "2023-06-07"
 output: html_document
 ---
+This file takes count data outputted from SeqMonk and annotates it with the information on the position, age, strand and chromosome of each TE. It also gives unique names to each TE. 
 
 ```{r setup}
-setwd('/Users/francescorivetti/Desktop/cello/sam_unpro/data')
+setwd('Where/data/is')
 library(tidyverse)
 library(Seurat)
 
 TE_TXT <- read.delim('TE_no_gene.txt')
-new_annotations <- readRDS("/Users/francescorivetti/Downloads/mouse_TE_age_filtered.rds")
-ins <- read.delim('/Users/francescorivetti/Desktop/daje.txt')
-
-
-new_annotations[new_annotations$start_position == 33554408,]
-
+new_annotations <- readRDS("Path/mouse_TE_age_filtered.rds")
 ```
 
 ```{r get transposon families}
