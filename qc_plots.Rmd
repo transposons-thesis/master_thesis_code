@@ -1,0 +1,220 @@
+---
+title: "QC plots"
+author: "F. Rivetti"
+date: "2023-06-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(Seurat)
+library(reshape2)
+library(scater)
+library(scuttle)
+library(scran)
+library(cluster)
+library(ggplot2)
+library(SingleCellExperiment)
+library(BiocSingular)
+library(gridExtra)
+library(dynamicTreeCut)
+
+# load previously made RDS file
+sce_original <- readRDS("/Users/francescorivetti/Desktop/cello/sam_unpro/data/SCE_full.rds")
+```
+  
+### Which genes?  
+```{r genes only}
+sce_genes <- sce_original[rowData(sce_original)$Class == "Gene", ]
+# plot mESCs genes and check expression
+
+grep("1919200]", rowData(sce_genes)$Family, value = TRUE)
+which(rowData(sce_genes)$Family == 'Nanog homeobox [Source:MGI Symbol;Acc:MGI:1919200]')
+ 
+# Pluri
+# Tbx3
+rowData(sce_genes)[5275,] 
+# Pou5f1
+rowData(sce_genes)[16269,]
+# Klf5
+rowData(sce_genes)[14393,]
+# Klf4
+rowData(sce_genes)[3652,]
+# Sox2
+rowData(sce_genes)[2620,]
+# Nanog
+rowData(sce_genes)[6360,]
+
+## Bar charts 
+extracted_table <- data.frame(logcounts(sce_genes))
+extracted_table$genes <- rownames(sce_genes)
+extracted_table <- subset(extracted_table, row.names(extracted_table) %in% c('Nanog', 'Sox2', 'Klf4', 'Klf5', 'Pou5f1', 'Tbx3'))
+melt_data <- melt(extracted_table, id = c('genes'))
+
+# manually add outliers melt_data[melt_data$genes == 'Klf4',]
+ggplot(melt_data, aes(x= genes, y=value)) + 
+  geom_boxplot(fill="#9bd4ac")  + scale_y_continuous(trans = 'log2') + theme_bw() + ylab("Gene expression log2(counts/size_factor)") + xlab(NULL) +ylim(0,13) + 
+
+  annotate('text', x = 'Klf4', y = 0.2, label = 'Cell 28') +
+  annotate('text', x = 'Klf5', y = 0, label = 'Cell 2, Cell 13') +
+  annotate('text', x = 'Nanog', y = 0.2, label = 'Cell 25') +
+  annotate('text', x = 'Tbx3', y = 0, label = 'Cell 76, Cell 86') 
+
+genes_TXT <- read.delim('/Users/francescorivetti/Desktop/cello/sam_unpro/data/genes.txt')
+
+# Diff 
+# ENSMUSG00000062327
+genes_TXT[47430,] 
+# ENSMUSG00000037025
+genes_TXT[6512,] 
+# Sox1
+rowData(sce_genes)[8064,]
+# ENSMUSG00000095139
+genes_TXT[10622,] 
+
+sox1 <- data.frame(logcounts(sce_genes))
+sox1$genes <- rownames(sce_genes)
+sox1 <- subset(sox1, row.names(sox1) %in% c('Sox1'))
+
+diff <- genes_TXT[c(47430, 6512, 10622),] 
+diff$genes <- c('Brachyuru', 'Foxa2', 'Pou3f2')
+for (i in c(1,2,3,4,13,14,15,16,25,26,27,28,37,38,39,40,49,50,51,52,61,62,63,64,73,74,75,76,85,86,87,88)){
+  i <- as.character(i)
+  u <- paste0('cell_', i)
+  diff <- diff %>% dplyr::rename(!!u := paste0('X00_barcode_',i,'.fastq.sam'))}
+# run sep 
+diff <- diff[,-(1:6)]
+# run sep 
+diff = subset(diff, select = -cell_61 )
+diff <- rbind(diff, sox1)
+
+melt_data_no <- melt(diff, id = c('genes'))
+
+# cell_40 4.1708332, cell_1 0.5161398
+ggplot(melt_data_no, aes(x= genes, y=value)) + geom_point() + theme_bw() + ylab("Gene expression log2(counts/size_factor)") + xlab(NULL) +
+    annotate('text', x = 'Sox1', y = 0.8, label = 'Cell 1') + 
+    annotate('text', x = 'Sox1', y = 4.5, label = 'Cell 40') +ylim(0,13)
+
+##### joint 
+joint <- rbind(diff, extracted_table)
+melt_data <- melt(joint, id = c('genes'))
+
+gen <- c("Foxa2", "Pou3f2" ,"Sox2" , "Klf4", "Tbx3", "Nanog", "Klf5","Pou5f1","Brachyuru")
+
+ggplot(melt_data, aes(x= f_genes, y=value)) + 
+  geom_boxplot() + scale_y_continuous(trans = 'log2')
+
+ggplot(melt_data, aes(x = geney=value)) + geom_boxplot() + scale_y_continuous(trans = 'log2')  + facet_wrap(~genes) 
+
+######################
+
+plot_1 <- ggplot(melt_data, aes(x= genes, y=value)) + 
+  geom_boxplot(fill="#9bd4ac")  + scale_y_continuous(trans = 'log2') + theme_bw() + ylab("Gene expression log2(counts/size_factor)") + xlab(NULL) +ylim(0,13) + 
+
+  annotate('text', x = 'Klf4', y = 0.2, label = 'Cell 28') +
+  annotate('text', x = 'Klf5', y = 0, label = 'Cell 2, Cell 13') +
+  annotate('text', x = 'Nanog', y = 0.2, label = 'Cell 25') +
+  annotate('text', x = 'Tbx3', y = 0, label = 'Cell 76, Cell 86') 
+
+plot_2 <- ggplot(melt_data_no, aes(x= genes, y=value)) + geom_point() + theme_bw() + ylab("Gene expression log2(counts/size_factor)") + xlab(NULL) +
+    annotate('text', x = 'Sox1', y = 0.8, label = 'Cell 1') + 
+    annotate('text', x = 'Sox1', y = 4.5, label = 'Cell 40') +ylim(0,13) + ylab(NULL) +   theme(
+        axis.text.y=element_blank(),  #remove y axis labels
+        axis.ticks.y=element_blank()  #remove y axis ticks
+        ) 
+
+ggarrange(plot_1, plot_2, 
+          ncol = 2, nrow = 1)
+
+
+```
+  
+### Mappability
+```{r Mappability}
+exp_notexp <- readRDS("/Users/francescorivetti/exp_notexp.rds")
+# remove non-TEs
+exp_notexp <- exp_notexp[exp_notexp$Class == 'LINE' | exp_notexp$Class == 'SINE' | exp_notexp$Class == 'LTR',]
+exp_notexp <- exp_notexp[exp_notexp$Family != 'Penelope' & exp_notexp$Family != 'Dong-R4' & exp_notexp$Family != 'CR1' & exp_notexp$Family != 'RTE-X' & exp_notexp$Family != 'Alu' & exp_notexp$Family != 'SINE' &  exp_notexp$Family != 'RTE-BovB' ,]
+
+
+# figure out which reps are expressed
+result <- apply(exp_notexp[,6:37], 1, mean)
+binary_exp <- ifelse(result > 0, 1, 0)
+# if mean = 0, not expressed/detected. 
+
+# make a new dataframe
+df_map <- data.frame(Class = exp_notexp$Class, Family = exp_notexp$Family, Age = exp_notexp$mya, Expression = binary_exp)
+
+## flip and change name
+df_not_exp <- df_map[df_map$Expression == 0 ,]
+df_not_exp$Expression <- 'Not detected'
+df_y_exp <- df_map[df_map$Expression == 1 ,]
+df_y_exp$Expression <- 'Detected'
+
+df_exp <- rbind(df_y_exp, df_not_exp)
+#################################
+ggplot(df_exp) + 
+  geom_freqpoly(aes(x=Age, color = as.factor(Family)), size= 1.5) +
+  geom_vline(xintercept=3, linetype="dashed", color = "black")+
+  scale_y_continuous(trans = 'log10') + 
+  scale_x_continuous(trans = 'log10') + 
+  scale_color_manual(values=c("#1f7b1c", "#c6e5c4", "#650084","#ebb8e1", "#a7009a","#ce53ba","#84008f", "#950095", "#001ba4", "#c6cbf4","#2a47ce", "#7687e6", "#2a47ce")) +
+  facet_grid(Expression~Class) + 
+  theme_classic(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+        strip.text = element_text(lineheight=10.0), 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 10),
+        legend.position = "right",
+        legend.direction = "vertical",
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm"),
+        strip.text.y.right = element_text(angle=90), legend.key.size = unit(0.2,"cm")) + 
+  labs(y="No. of repeats", x="Age (mya)")
+```
+
+### Mappability LINE-1s
+```{r Mappability LINE-1s}
+exp_notexp <- readRDS("/Users/francescorivetti/exp_notexp.rds")
+# only get LINE-1s
+exp_notexp <- exp_notexp[exp_notexp$Family == 'L1' ,]
+
+
+# figure out which reps are expressed
+result <- apply(exp_notexp[,6:37], 1, mean)
+binary_exp <- ifelse(result > 0, 1, 0)
+# if mean = 0, not expressed/detected. 
+
+# make a new dataframe
+df_map <- data.frame(Family = exp_notexp$Family, Age = exp_notexp$mya, Expression = binary_exp)
+
+## flip and change name
+df_not_exp <- df_map[df_map$Expression == 0 ,]
+df_not_exp$Expression <- 'Not detected'
+df_y_exp <- df_map[df_map$Expression == 1 ,]
+df_y_exp$Expression <- 'Detected'
+
+df_exp <- rbind(df_y_exp, df_not_exp)
+df_exp$Family <- rep('LINE-1', nrow(df_exp))
+#################################
+ggplot(df_exp) + 
+  geom_freqpoly(aes(x=Age, color = as.factor(Family)), size= 1.5) +
+  geom_vline(xintercept=3, linetype="dashed", color = "black")+
+  scale_y_continuous(trans = 'log10') + 
+  scale_x_continuous(trans = 'log10') + 
+  scale_color_manual(values=c("#1f7b1c")) +
+  facet_grid(Expression~Family) + 
+  theme_classic(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+        strip.text = element_text(lineheight=10.0), 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 10),
+        legend.position = "NONE",
+        legend.direction = "vertical",
+        plot.margin = unit(c(0.5,0.5, 0.5, 0.5), "cm"),
+        strip.text.y.right = element_text(angle=90), legend.key.size = unit(0.2,"cm")) + 
+  labs(y="No. of repeats", x="Age (mya)")
+```
+  knitr::opts_chunk$set(echo = TRUE)
+
+
+
