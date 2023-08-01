@@ -1,6 +1,6 @@
 ---
 title: "specific_sc_analysis"
-author: "F. Rivetti"
+author: "Student"
 date: "2023-06-13"
 output: html_document
 ---
