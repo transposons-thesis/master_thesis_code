@@ -4,6 +4,7 @@ author: "F. Rivetti"
 date: "2023-06-09"
 output: html_document
 ---
+### This code will help you create a sce object from CELLO-seq data. And, the qc steps are detailed here. 
 ## Set-up
 ```{r message = FALSE}
 library(tidyverse)
@@ -20,7 +21,7 @@ library(dynamicTreeCut)
 # if downloading from BioConductor use BiocManager::install("XXXXX")
 # to download scater you will need devtools and then devtools::install_github("davismcc/scater", build_vignettes = TRUE)
 
-TE_genes_rds <- readRDS("/Users/francescorivetti/Desktop/cello/sam_unpro/data/anno_TE_genes.rds")
+TE_genes_rds <- readRDS("")
 # some genes have duplicate names
 # find them
 duplos <- which(duplicated(TE_genes_rds$Feature))
@@ -282,17 +283,5 @@ gridExtra::grid.arrange(
 ## Save data
 ```{r}
 #save RDS data
-# saveRDS(sce_TE, "/Users/francescorivetti/Desktop/cello/sam_unpro/data/SCE_full.rds")
 
-# write.table(counts(sce_TE), "/Users/francescorivetti/Desktop/cello/sam_unpro/data/raw_counts_TE_GENES.txt")
-# write.table(colData(sce_TE), "/Users/francescorivetti/Desktop/cello/sam_unpro/data/METADATA_TE_GENES.txt")
-# write.table(rowData(sce_TE), "/Users/francescorivetti/Desktop/cello/sam_unpro/data/cell_rowdata.txt")
-# write.table(rownames(sce_TE),"/Users/francescorivetti/Desktop/cello/sam_unpro/data/FEATURES.tsv", sep = "\t", row.names = FALSE)
-# write.table(stats.df, "/Users/francescorivetti/Desktop/cello/sam_unpro/data/filtering.tsv", sep = "\t", row.names = FALSE)
-
-
-# plot(reducedDims(subset)$TSNE[,1], reducedDims(subset)$TSNE[,2],  col=c("black", "red")[grepl("Control", subset$Exp_setup)+1], pch =16 )
-# text(reducedDims(subset)$TSNE[,1], reducedDims(subset)$TSNE[,2], colnames(subset), pos = 3)
-#legend("topleft", legend = unique(subset$Exp_setup), col = c("black", "red"), pch=16)
-# title('t-SNE plot of all LINE-1s')
 ```
