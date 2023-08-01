@@ -1,0 +1,298 @@
+---
+title: "Single cell analysis"
+author: "F. Rivetti"
+date: "2023-06-09"
+output: html_document
+---
+## Set-up
+```{r message = FALSE}
+library(tidyverse)
+library(Seurat)
+library(reshape2)
+library(scater)
+library(scuttle)
+library(scran)
+library(ggplot2)
+library(SingleCellExperiment)
+library(BiocSingular)
+library(gridExtra)
+library(dynamicTreeCut)
+# if downloading from BioConductor use BiocManager::install("XXXXX")
+# to download scater you will need devtools and then devtools::install_github("davismcc/scater", build_vignettes = TRUE)
+
+TE_genes_rds <- readRDS("/Users/francescorivetti/Desktop/cello/sam_unpro/data/anno_TE_genes.rds")
+# some genes have duplicate names
+# find them
+duplos <- which(duplicated(TE_genes_rds$Feature))
+# rename them by their name+locus
+for (duplo in duplos){ 
+TE_genes_rds[duplo,38] <- paste(TE_genes_rds[duplo,1], TE_genes_rds[duplo,2],TE_genes_rds[duplo,3],TE_genes_rds[duplo,4],TE_genes_rds[duplo,5], sep='_')}
+# now that features are unique we can use the features as rownames
+rownames(TE_genes_rds) <- TE_genes_rds$Feature
+```
+
+## Make SCE object
+```{r SCE construction}
+# define which cols are counts
+count_cols = grepl("cell_", colnames(TE_genes_rds))
+sce_TE <- SingleCellExperiment(assays=list(counts=as.matrix(TE_genes_rds[, count_cols])))
+
+# define column metadata, i.e. of cells
+Exp_setup <- factor(c("LINE_1_insertion", "LINE_1_insertion", "LINE_1_insertion", "Control", "Control", "LINE_1_insertion", "LINE_1_insertion", "LINE_1_insertion", "Control", "Control", "Control", "LINE_1_insertion", "LINE_1_insertion", "Control", "Control", "Control","LINE_1_insertion", "LINE_1_insertion", "Control", "Control", "LINE_1_insertion", "LINE_1_insertion", "Control", "Control", "LINE_1_insertion", "LINE_1_insertion", "Control", "Control", "LINE_1_insertion", "LINE_1_insertion", "Control", "Control"))
+colData(sce_TE)$Exp_setup <- Exp_setup
+
+# define row metadata, i.e. genes
+Subfamily <- TE_genes_rds$Subfamily
+Chromosome <- TE_genes_rds$Chromosome
+Start <- TE_genes_rds$Start
+End <- TE_genes_rds$End
+Strand <- TE_genes_rds$Strand
+Feature <- TE_genes_rds$Feature
+Family <- TE_genes_rds$Family
+Class <- TE_genes_rds$Class
+mya <- TE_genes_rds$mya
+
+
+rowData(sce_TE)$Subfamily <- Subfamily
+rowData(sce_TE)$Chromosome <- Chromosome
+rowData(sce_TE)$Start <- Start
+rowData(sce_TE)$End <- End
+rowData(sce_TE)$Strand <- Strand
+rowData(sce_TE)$Feature <- Feature
+rowData(sce_TE)$Family <- Family
+rowData(sce_TE)$Class <- Class
+rowData(sce_TE)$mya <- mya
+```
+## Run QC
+```{r }
+unfiltered <- sce_TE
+stats <- perCellQCMetrics(sce_TE)
+qc <- quickPerCellQC(stats)
+# remove low-quality cells
+sce_TE <- sce_TE[,!qc$discard]
+
+colData(unfiltered) <- cbind(colData(unfiltered), stats)
+unfiltered$discard <- qc$discard
+colnames(unfiltered) = rep('', 32)
+colnames(unfiltered)[21] <- 'Cell 61'
+gridExtra::grid.arrange(
+    plotColData(unfiltered, y="sum", 
+        colour_by="discard") + scale_y_log10() + ylab("Total counts") + theme(legend.position = "none") + geom_text(aes(label=colnames(unfiltered))),
+    plotColData(unfiltered, y="detected",  
+        colour_by="discard") + scale_y_log10() + ylab("Number of moleucles detected") + geom_text(aes(label=colnames(unfiltered))),
+    ncol=2
+# + theme(legend.position = "none")
+)
+####
+plotColData(unfiltered, y="sum", 
+        colour_by="discard") + scale_y_log10() + ylab("Total counts") + theme(legend.position = "none") + geom_text(aes(label=colnames(unfiltered)))
+# For what reasons were cells removed?
+colSums(as.matrix(qc))
+# which cell was removed?
+for (cell in 1:(nrow(qc))){
+  if (qc$discard[cell] == TRUE){ 
+    print(paste(colnames(unfiltered)[cell], "was removed after QC."))} 
+}
+
+
+##### genes and molecules y?
+sce_TE_genic <- sce_TE[rowData(sce_TE)$Class == "Gene", ]
+stats <- perCellQCMetrics(sce_TE_genic)
+qc <- quickPerCellQC(stats)
+colData(sce_TE_genic)$libsize <- stats$sum
+colData(sce_TE_genic)$genes <- stats$detected
+sce_TE_genic <- sce_TE_genic[Matrix::rowSums(counts(sce_TE_genic)) > 0,]
+# sce_lr_2cell_genic <- scater::addPerFeatureQC(sce_lr_2cell_genic)
+#visualise number of genes vs molecules
+#### meaning? 
+plot(colData(sce_TE_genic)$libsize, colData(sce_TE_genic)$genes, main="Genes per molecules",
+ylab="number of genes",xlab ="number of molecules", pch=16, cex.lab=1, cex.main=1, cex.axis=1)
+
+### change colnames for this 
+ori <- colnames(sce_TE_genic) 
+new <- c("Cell 1" , "Cell 13", "Cell 14" ,"Cell 15", "Cell 16", "Cell 2" , "Cell 25",  
+"Cell 26", "Cell 27", "Cell 28" ,"Cell 3" , "Cell 37", "Cell 38", "Cell 39",  
+"Cell 4" , "Cell 40", "Cell 49" ,"Cell 50", "Cell 51", "Cell 52", "Cell 62",  
+"Cell 63", "Cell 64", "Cell 73" ,"Cell 74", "Cell 75", "Cell 76", "Cell 85",  
+"Cell 86", "Cell 87", "Cell 88")
+colnames(sce_TE_genic) <- new
+  
+
+
+plot(colData(sce_TE_genic)$libsize, colData(sce_TE_genic)$genes,ylim=c(0,13000) ,main=NULL,yaxt = "n",xaxt = "n" , ylab='',xlab ="Number of molecules Number of detected genes", pch=16, cex.lab=1, cex.main=1,  col=c("black", "red")[grepl("LINE_1_insertion", sce_TE_genic$Exp_setup)+1], cex.axis=1) 
+
+legend(x = 'right', box.col = "black",
+         pch =16, col=c('black','red'),title="Legend", 
+       legend=c("Control", "LINE-1 insertion"))
+text(colData(sce_TE_genic)$libsize, colData(sce_TE_genic)$genes, colnames(sce_TE_genic), pos = 3) 
+
+axis(side = 2, at = pretty(colData(sce_TE_genic)$genes), labels = format(pretty(colData(sce_TE_genic)$genes), big.mark = ","), las = 1)
+
+axis(side = 1, at = pretty(colData(sce_TE_genic)$libsize), labels = format(pretty(colData(sce_TE_genic)$libsize), big.mark = ","), las = 1)
+
+colnames(sce_TE_genic)  <- ori
+
+```
+## Normalization
+```{r fig.height=10, fig.width=10}
+#remove batch effect, none as no batch? #######################Q
+sce_TE <- computeSumFactors(sce_TE)
+sce_TE <- logNormCounts(sce_TE)
+
+# compare to unfiltered
+unfiltered <- computeSumFactors(unfiltered)
+unfiltered <- logNormCounts(unfiltered)
+
+
+# X and y are different ways to normalize. 
+plot(librarySizeFactors(sce_TE), sizeFactors(sce_TE), pch=16,
+    xlab="Library size factors", ylab="Deconvolution factors", col=c("black", "red")[grepl("Control", sce_TE$Exp_setup)+1], log='xy')
+legend("topleft", legend = unique(sce_TE$Exp_setup), col = c("black", "red"), pch=16)
+title(main="Post-QC")
+
+# plots comparing pre and post-QC
+layout_matrix <- matrix(1:2, ncol=2, nrow=2)
+layout(layout_matrix)
+
+plot(librarySizeFactors(unfiltered), sizeFactors(unfiltered), pch=16,
+    xlab="Library size factors", ylab="Deconvolution factors", col=c("black", "red")[grepl("Control", unfiltered$Exp_setup)+1], log='xy')
+text(librarySizeFactors(unfiltered), sizeFactors(unfiltered), colnames(unfiltered), pos = 3)
+legend("topleft", legend = unique(unfiltered$Exp_setup), col = c("black", "red"), pch=16)
+title(main="Pre-QC")
+
+plot(librarySizeFactors(sce_TE), sizeFactors(sce_TE), pch=16,
+    xlab="Library size factors", ylab="Deconvolution factors", col=c("black", "red")[grepl("Control", sce_TE$Exp_setup)+1], log='xy')
+text(librarySizeFactors(sce_TE), sizeFactors(sce_TE), colnames(sce_TE), pos = 3)
+legend("topleft", legend = unique(sce_TE$Exp_setup), col = c("black", "red"), pch=16)
+title(main="Post-QC")
+
+print("Post QC these are the remaining cells")
+cur_stats <- melt(table(colData(sce_TE)$Exp_setup))
+data.frame(Sample = cur_stats$Var1,
+                        n_cells = cur_stats$value)
+
+saveRDS(sce_TE, "/Users/francescorivetti/Desktop/cello/sam_unpro/data/SCE_full.rds")
+```
+
+```{r batch?}
+un <- unfiltered[,colnames(unfiltered) != 'cell_61']
+
+gridExtra::grid.arrange(
+    plotColData(un, y="sum", 
+        colour_by="Exp_setup") + scale_y_log10() + ylab("Total counts") + theme(legend.position = "none"),
+    plotColData(un, y="detected",  
+        colour_by="Exp_setup") + scale_y_log10() + ylab("Number of moleucles detected"),
+    ncol=2
+)
+
+library(limma)
+assay(sce_TE, "corrected") <- removeBatchEffect(logcounts(sce_TE), batch=sce_TE$Exp_setup)
+
+########################################
+extracted_table <- data.frame(assays(sce_TE)$corrected)
+extracted_table$genes <- rownames(sce_TE)
+# run the variables first 
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+LINE_1_fam_binary <- apply(ifelse(LINE_1_insertion_df > 0, 1, 0), 2, sum)
+Control_fam_binary <- apply(ifelse(Control_df > 0, 2, 0), 2, sum)
+
+# melt
+melt_LINE_1 <- melt(LINE_1_fam_binary)
+melt_LINE_1$set_up <- 'Insertion'
+melt_Control <- melt(Control_fam_binary)
+melt_Control$set_up <- 'Control'
+melt_melt <- rbind(melt_Control, melt_LINE_1)
+
+
+library(ggpubr)
+
+ggplot(melt_melt, aes(y=value, x=set_up, fill=set_up)) + geom_boxplot()  + stat_compare_means(method='wilcox.test') + ylab("Number of LINE-1 repeats expressed per cell") + theme_bw()
+
+
+```
+
+```{r Class analysis}
+# compare classes 
+extracted_table <- data.frame(logcounts(sce_TE))
+extracted_table <- data.frame(apply(extracted_table, MARGIN=1, FUN=mean))
+extracted_table$Class <- rowData(sce_TE)$Class
+extracted_table <- extracted_table[!extracted_table$Class == "Gene" & !extracted_table$Class == "DNA" & !extracted_table$Class == "Satellite",]
+# melt_data$exp_set_up <- rep(sce_9$Exp_setup, each=nrow(extracted_table))
+colnames(extracted_table)[1] <- 'value'
+
+ggplot(extracted_table, aes(x= Class, y=value)) + 
+  geom_boxplot()  + coord_trans(y = "log2")
+
+# by set-up
+exp <- assays(sce_TE)$logcounts[,c(1,2,3,6,7,8,12,13,17,18,21,24,25,28,29)]
+cont <- assays(sce_TE)$logcounts[,c(4,5,9,10,11,14,15,16,19,20,22,23,26,27,30,31)]
+exp <- data.frame(apply(exp, MARGIN=1, FUN=mean))
+cont <- data.frame(apply(cont, MARGIN=1, FUN=mean))
+exp$Class <- rowData(sce_TE)$Class
+cont$Class <- rowData(sce_TE)$Class
+exp <- exp[!exp$Class == "Gene" & !exp$Class == "DNA" & !exp$Class == "Satellite",]
+colnames(exp)[1] <- 'value'
+cont <- cont[!cont$Class == "Gene" & !cont$Class == "DNA" & !cont$Class == "Satellite",]
+colnames(cont)[1] <- 'value'
+
+# combined 
+colnames(cont)[1] <- 'exp'
+cont$insertion <- exp$value
+colnames(cont) <- c("Control", "Class", "Insertion")
+df <- melt(cont)
+df <- df %>% 
+  dplyr::mutate(fill = paste(Class, "-", variable))
+
+ggplot(df, aes(x= variable, y=value)) + 
+  geom_boxplot(aes(fill = fill), col  = "black", show.legend = F) + scale_y_continuous(trans = 'log10') +  facet_wrap(~Class) + ylab("log2(counts/size factor)") + xlab(NULL) + scale_fill_manual(values = c("#1f7b1c", "#c6e5c4", "#650084","#ebb8e1", "#001ba4", "#c6cbf4")) + theme_bw()
+```
+
+```{r Dimensionality reduction}
+# re-run with only TEs?
+# take the top 10% of genes with the largest biological components
+chosen_hvgs <- getTopHVGs(sce_TE, prop=0.1)
+# use all genes?
+
+# dimensionality reduction
+sce_TE <- runPCA(sce_TE, ncomponents=10, subset_row=chosen_hvgs,
+    exprs_values="logcounts", BSPARAM=BiocSingular::ExactParam())
+# useNames = NA is deprecated. Instead, specify either useNames = TRUE or useNames = TRUE. 
+set.seed(1010)
+sce_TE <- runTSNE(sce_TE, dimred="PCA", perplexity=10)
+
+# Clustering
+my.dist <- dist(reducedDim(sce_TE, "PCA"))
+my.tree <- hclust(my.dist, method="ward.D2")
+my.clusters <- unname(cutreeDynamic(my.tree, distM=as.matrix(my.dist),
+    minClusterSize=10, verbose=0))
+colLabels(sce_TE) <- factor(my.clusters)
+# We compare the clusters to the plate of origin. Each cluster is comprised of cells from both batches, indicating that the clustering is not driven by a batch effect.
+table(Cluster=colLabels(sce_TE))
+
+gridExtra::grid.arrange(
+    plotTSNE(sce_TE) + ggtitle("t-SNE by cluster"), 
+    plotTSNE(sce_TE, colour_by="Exp_setup") + ggtitle("t-SNE by experimental set-up"),
+    nrow=2
+)
+
+```
+
+## Save data
+```{r}
+#save RDS data
+# saveRDS(sce_TE, "/Users/francescorivetti/Desktop/cello/sam_unpro/data/SCE_full.rds")
+
+# write.table(counts(sce_TE), "/Users/francescorivetti/Desktop/cello/sam_unpro/data/raw_counts_TE_GENES.txt")
+# write.table(colData(sce_TE), "/Users/francescorivetti/Desktop/cello/sam_unpro/data/METADATA_TE_GENES.txt")
+# write.table(rowData(sce_TE), "/Users/francescorivetti/Desktop/cello/sam_unpro/data/cell_rowdata.txt")
+# write.table(rownames(sce_TE),"/Users/francescorivetti/Desktop/cello/sam_unpro/data/FEATURES.tsv", sep = "\t", row.names = FALSE)
+# write.table(stats.df, "/Users/francescorivetti/Desktop/cello/sam_unpro/data/filtering.tsv", sep = "\t", row.names = FALSE)
+
+
+# plot(reducedDims(subset)$TSNE[,1], reducedDims(subset)$TSNE[,2],  col=c("black", "red")[grepl("Control", subset$Exp_setup)+1], pch =16 )
+# text(reducedDims(subset)$TSNE[,1], reducedDims(subset)$TSNE[,2], colnames(subset), pos = 3)
+#legend("topleft", legend = unique(subset$Exp_setup), col = c("black", "red"), pch=16)
+# title('t-SNE plot of all LINE-1s')
+```
