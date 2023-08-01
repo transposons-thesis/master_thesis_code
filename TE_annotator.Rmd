@@ -1,0 +1,137 @@
+---
+title: "Seurat_TEs"
+author: "F. Rivetti"
+date: "2023-06-07"
+output: html_document
+---
+
+```{r setup}
+setwd('/Users/francescorivetti/Desktop/cello/sam_unpro/data')
+library(tidyverse)
+library(Seurat)
+
+TE_TXT <- read.delim('TE_no_gene.txt')
+new_annotations <- readRDS("/Users/francescorivetti/Downloads/mouse_TE_age_filtered.rds")
+ins <- read.delim('/Users/francescorivetti/Desktop/daje.txt')
+
+
+new_annotations[new_annotations$start_position == 33554408,]
+
+```
+
+```{r get transposon families}
+TE_TXT <- dplyr::select(TE_TXT, - c("Feature","Description","Feature.Strand","ID", "Feature.Orientation", "Distance", "Type"))
+TE_TXT <- TE_TXT %>% dplyr::rename(c("Subfamily" = Probe, "Strand" = Probe.Strand ))
+
+#subset actually expressed genes
+TE_TXT_exp <- TE_TXT[rowSums(x = Filter(f = is.numeric, x = TE_TXT[6:37]) >= 1) >= 1,]
+
+# Clean-up annotation file
+new_annotations <- dplyr::select(new_annotations, -c('substitution_proportion', 'jc_distance'))
+#remove unneccesary Xsomes 
+new_annotations <- dplyr::filter(new_annotations, chromosome_name == "chr1" | chromosome_name == "chr2" | chromosome_name == "chr3" | chromosome_name == "chr4" | chromosome_name == "chr5" | chromosome_name == "chr6" | chromosome_name == "chr7" | chromosome_name == "chr8" | chromosome_name == "chr9" | chromosome_name == "chr10" | chromosome_name == "chr11" | chromosome_name == "chr12" | chromosome_name == "chr13" | chromosome_name == "chr14" | chromosome_name == "chr15" | chromosome_name == "chr16" | chromosome_name == "chr17" | chromosome_name == "chr18" | chromosome_name == "chr19" | chromosome_name == "chrX" | chromosome_name == "chrY")
+#rename the Xsome to match SeqMonk output
+new_annotations <- mutate(new_annotations, chromosome_name=(sub("chr", "", new_annotations$chromosome_name)))
+
+# rename column names to mathc SeqMonk
+new_annotations <- new_annotations %>% dplyr::rename(c("Chromosome" = chromosome_name, "Start" = start_position, "End" = end_position, "Subfamily" = name,  "Family" = repFamily, "Class" = repClass, "Strand" = strand, "mya" = mya ))
+```
+
+
+
+```{r pressure, echo=FALSE}
+# make a unique name for TEs
+new_annotations$Feature <- paste(new_annotations$Chromosome, new_annotations$Start, new_annotations$End, new_annotations$Strand, sep="_")
+
+# remove repetitive DNA
+new_annotations <- dplyr::filter(new_annotations, new_annotations$Class != "Low_complexity" & new_annotations$Class != "Simple_repeat" & 
+  new_annotations$Class != "tRNA" & new_annotations$Class != "snRNA"  & new_annotations$Class != "rRNA")
+# check for duplicates new_annotations[duplicated(new_annotations$Feature), ]
+# make unique name rowname new_annotations <- distinct(new_annotations, Feature, .keep_all = TRUE)
+rownames(new_annotations) <- new_annotations$Feature
+
+##### repeat same for TE count table 
+TE_TXT_exp$Feature <- paste(TE_TXT_exp$Chromosome, TE_TXT_exp$Start, TE_TXT_exp$End, TE_TXT_exp$Strand, sep="_")
+TE_TXT_exp <- distinct(TE_TXT_exp, Feature, .keep_all = TRUE) #remove duplicates, check there are few, many is odd
+rownames(TE_TXT_exp) <- TE_TXT_exp$Feature
+
+# join two dataframes by index, i.e. unique TE name
+TE_anno <- inner_join(TE_TXT_exp, new_annotations, by=c("Chromosome", "Start", "End", "Strand", "Feature", "Subfamily"))
+
+# if fusion does not go well check what was not added leftovers <- anti_join(TE_TXT_exp, TE_anno)
+
+```
+
+```{r repeat for genes}
+genes_TXT <- read.delim('genes.txt')
+genes_TXT <- dplyr::select(genes_TXT, - c("Feature","Feature.Strand","ID", "Feature.Orientation", "Distance", "Type"))
+genes_TXT <- genes_TXT %>% dplyr::rename(c("Subfamily" = Probe, "Strand" = Probe.Strand, "Family" = Description))
+genes_exp <- genes_TXT[rowSums(x = Filter(f = is.numeric, x = genes_TXT[6:37]) >= 1) >= 1,]
+# tranpososn classs is just = Gene and family is gene description from fille annotation
+genes_exp$Class <- "Gene"
+# age and mya set to 0
+genes_exp$mya <- 0
+genes_exp$Feature <- genes_exp$Subfamily
+
+# merge datasets, if it does not work, coluns mismatch
+gene_TE <- rbind(TE_anno, genes_exp)
+
+# rename cell columns
+for (i in c(1,2,3,4,13,14,15,16,25,26,27,28,37,38,39,40,49,50,51,52,61,62,63,64,73,74,75,76,85,86,87,88)){
+  i <- as.character(i)
+  u <- paste0('cell_', i)
+  gene_TE <- gene_TE %>% dplyr::rename(!!u := paste0('X00_barcode_',i,'.fastq.sam'))}
+
+saveRDS(gene_TE, "anno_TE_genes.rds") 
+
+
+```
+
+```{r Simple repeats}
+# repeat prep steps as before 
+setwd('/Users/francescorivetti/Desktop/cello/sam_unpro/data')
+TE_TXT <- read.delim('TE_no_gene.txt')
+TE_TXT <- dplyr::select(TE_TXT, - c("Feature","Description","Feature.Strand","ID", "Feature.Orientation", "Distance", "Type"))
+TE_TXT <- TE_TXT %>% dplyr::rename(c("Subfamily" = Probe, "Strand" = Probe.Strand ))
+TE_TXT_exp <- TE_TXT[rowSums(x = Filter(f = is.numeric, x = TE_TXT[6:37]) >= 1) >= 1,]
+TE_TXT_exp$Feature <- paste(TE_TXT_exp$Chromosome, TE_TXT_exp$Start, TE_TXT_exp$End, TE_TXT_exp$Strand, sep="_")
+TE_TXT_exp <- distinct(TE_TXT_exp, Feature, .keep_all = TRUE)
+rownames(TE_TXT_exp) <- TE_TXT_exp$Feature
+
+
+rep_annotations <- read.delim('/Users/francescorivetti/Downloads/mm10_repeatmasker_ucsc_20190823.rmsk.jc_(1).txt', header = FALSE)
+rep_annotations <- dplyr::select(rep_annotations, -c(8,9))
+rep_annotations <- dplyr::filter(rep_annotations, V1 == "chr1" | V1 == "chr2" | V1 == "chr3" | V1 == "chr4" | V1 == "chr5" | V1 == "chr6" | V1 == "chr7" | V1 == "chr8" | V1 == "chr9" | V1 == "chr10" | V1 == "chr11" | V1 == "chr12" | V1 == "chr13" | V1 == "chr14" | V1 == "chr15" | V1 == "chr16" | V1 == "chr17" | V1 == "chr18" | V1 == "chr19" | V1 == "chrX" | V1 == "chrY")
+rep_annotations <- mutate(rep_annotations, V1=(sub("chr", "", rep_annotations$V1)))
+rep_annotations <- rep_annotations %>% dplyr::rename(c("Chromosome" = V1, "Start" = V2, "End" = V3, "Subfamily" = V4,  "Family" = V5, "Class" = V6, "Strand" = V7))
+rep_annotations$Feature <- paste(rep_annotations$Chromosome, rep_annotations$Start, rep_annotations$End, rep_annotations$Strand, sep="_")
+rep_annotations <- dplyr::filter(rep_annotations, rep_annotations$Class == "Low_complexity" | rep_annotations$Class == "Simple_repeat" | 
+  rep_annotations$Class == "tRNA" | rep_annotations$Class == "snRNA"  | rep_annotations$Class == "rRNA")
+# check for duplicates rep_annotations[duplicated(rep_annotations$Feature), ]
+# make unique name rowname rep_annotations <- distinct(rep_annotations, Feature, .keep_all = TRUE)
+rownames(rep_annotations) <- rep_annotations$Feature
+
+# join
+rep_anno <- inner_join(TE_TXT_exp, rep_annotations, by=c("Chromosome", "Start", "End", "Strand", "Feature", "Subfamily"))
+
+
+# reepat with genes 
+genes_TXT <- read.delim('genes.txt')
+genes_TXT <- dplyr::select(genes_TXT, - c("Feature","Feature.Strand","ID", "Feature.Orientation", "Distance", "Type"))
+genes_TXT <- genes_TXT %>% dplyr::rename(c("Subfamily" = Probe, "Strand" = Probe.Strand, "Family" = Description))
+genes_exp <- genes_TXT[rowSums(x = Filter(f = is.numeric, x = genes_TXT[6:37]) >= 1) >= 1,]
+genes_exp$Class <- "Gene"
+genes_exp$Feature <- genes_exp$Subfamily
+
+# merge datasets, if it does not work, coluns mismatch
+gene_TE <- rbind(rep_anno, genes_exp)
+
+#save file
+for (i in c(1,2,3,4,13,14,15,16,25,26,27,28,37,38,39,40,49,50,51,52,61,62,63,64,73,74,75,76,85,86,87,88)){
+  i <- as.character(i)
+  u <- paste0('cell_', i)
+  gene_TE <- gene_TE %>% dplyr::rename(!!u := paste0('X00_barcode_',i,'.fastq.sam'))}
+saveRDS(gene_TE, "rep_anno.rds") 
+
+```
+
