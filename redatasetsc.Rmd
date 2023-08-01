@@ -1,0 +1,652 @@
+---
+title: "Error_kor"
+author: "F. Rivetti"
+date: "2023-07-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(scater)
+library(scran)
+library(pheatmap)
+library(readr)
+library(tibble)
+library(reshape2)
+library(Matrix)
+library(viridis)
+library(irlba)
+library(stringr)
+library(biomaRt)
+library(SingleCellExperiment)
+library(scRNAseq)
+library(tidyverse)
+
+# two datasets
+reps <- readRDS('')
+genes <- readRDS('')
+
+#get which cells are not present in both
+differences_list1 <- setdiff(colnames(reps), colnames(genes))
+# removve them from the other dataset 
+reps <- reps[,!colnames(reps) %in% differences_list1]
+# remove data to enable merging
+colData(reps)$libsize <- 0
+colData(reps)$genes <- 0
+colData(reps)$sizeFactor <- 0
+colData(genes)$libsize <- 0
+colData(genes)$genes <- 0
+colData(genes)$sizeFactor <- 0
+assays(genes)$logcounts <- NULL
+altExps(genes) <- NULL
+altExps(reps) <- NULL
+sce_corr <- rbind(reps, genes)
+```
+
+
+```{r QC}
+unfiltered <- sce_corr
+stats <- perCellQCMetrics(sce_corr)
+qc <- quickPerCellQC(stats)
+# remove low-quality cells
+sce_corr <- sce_corr[,!qc$discard]
+
+# For what reasons were cells removed?
+colSums(as.matrix(qc))
+# which cell was removed?
+for (cell in 1:(nrow(qc))){
+  if (qc$discard[cell] == TRUE){ 
+    print(paste(colnames(unfiltered)[cell], "was removed after QC."))} 
+}
+
+################## Norm
+sce_corr <- computeSumFactors(sce_corr)
+sce_corr <- logNormCounts(sce_corr)
+
+```
+
+```{r batch uncorrected PCA}
+############
+library(dynamicTreeCut)
+sce_corr$Batches <- as.factor(c(rep(8,90),rep(7,93)))
+
+# take the top 10% of genes with the largest biological components
+chosen_hvgs <- getTopHVGs(sce_corr, prop=0.1)
+# use all genes?
+
+# dimensionality reduction
+sce_corr <- runPCA(sce_corr, ncomponents=10, subset_row=chosen_hvgs,
+    exprs_values="logcounts", BSPARAM=BiocSingular::ExactParam())
+# useNames = NA is deprecated. Instead, specify either useNames = TRUE or useNames = TRUE. 
+set.seed(1010)
+sce_corr <- runTSNE(sce_corr, dimred="PCA", perplexity=10)
+
+# Clustering
+my.dist <- dist(reducedDim(sce_corr, "PCA"))
+my.tree <- hclust(my.dist, method="ward.D2")
+my.clusters <- unname(cutreeDynamic(my.tree, distM=as.matrix(my.dist),
+    minClusterSize=10, verbose=0))
+colLabels(sce_corr) <- factor(my.clusters)
+# We compare the clusters to the plate of origin. Each cluster is comprised of cells from both batches, indicating that the clustering is not driven by a batch effect.
+table(Cluster=colLabels(sce_corr))
+
+plotTSNE(sce_corr, colour_by="Batches" ) # + ggtitle("t-SNE by cluster") 
+```
+
+
+```{r batch correction}
+################## Batch correction 
+library(limma)
+assay(sce_corr, "corrected") <- removeBatchEffect(logcounts(sce_corr), batch=sce_corr$Batches)
+
+#####
+chosen_hvgs <- getTopHVGs(sce_corr, prop=0.1)
+# use all genes?
+
+# dimensionality reduction
+sce_corr <- runPCA(sce_corr, ncomponents=10, subset_row=chosen_hvgs,
+    exprs_values="corrected", BSPARAM=BiocSingular::ExactParam())
+# useNames = NA is deprecated. Instead, specify either useNames = TRUE or useNames = TRUE. 
+set.seed(1010)
+sce_corr <- runTSNE(sce_corr, dimred="PCA", perplexity=10)
+
+# Clustering
+my.dist <- dist(reducedDim(sce_corr, "PCA"))
+my.tree <- hclust(my.dist, method="ward.D2")
+my.clusters <- unname(cutreeDynamic(my.tree, distM=as.matrix(my.dist),
+    minClusterSize=10, verbose=0))
+colLabels(sce_corr) <- factor(my.clusters)
+# We compare the clusters to the plate of origin. Each cluster is comprised of cells from both batches, indicating that the clustering is not driven by a batch effect.
+table(Cluster=colLabels(sce_corr))
+
+plotTSNE(sce_corr, colour_by="Batches" ) # + ggtitle("t-SNE by cluster") 
+
+
+```
+
+
+```{r analysis}
+library(scales)
+########### only L1s
+L1_sce_corr <- subset(sce_corr, grepl("^L1", rownames(sce_corr)))
+
+################# y- number of cells expressing it, x - numebr of cells 
+
+extracted_table <- data.frame(assays(L1_sce_corr)$counts)
+extracted_table$genes <- rownames(L1_sce_corr)
+fam_binary <- apply(ifelse(extracted_table > 0, 1, 0), 1, sum)
+molten <- melt(fam_binary) opwer
+
+
+ggplot(molten, aes(value/ncol(L1_sce_corr)*100)) + geom_histogram(bins=100) + ylab("Number of expressed repeats") + xlab("Percentage of cells expressing a particular repeat") + theme_bw() # + scale_x_continuous(labels = scales::percent) # + scale_x_continuous(breaks = 0:16, labels = 0:16) + ggtitle("Repea") + 
+
+
+ggplot(molten, aes(value/ncol(L1_sce_corr)*100)) + geom_histogram(bins=100) + ylab("Number of expressed repeats") + xlab("Percentage of cells expressing a particular repeat") + theme_bw() # + scale_x_continuous(labels = scales::percent) # + scale_x_continuous(breaks = 0:16, labels = 0:16) + ggtitle("Repea") + 
+
+# CHANGE x and colour?
+ggplot(molten, aes(x = factor(value/ncol(L1_sce_corr)*100))) +
+  geom_histogram(stat = "count", fill = "grey", color = "black") +
+  labs(x = "Percentage of cells expressing a given repeat",
+       y = "Number of repeats") + theme_bw()# + xlim(0,60)
+
+############ 
+ggplot(molten, aes(x = factor(value))) +
+  geom_histogram(stat = "count", fill = "#1f7b1c", color = "black") +
+  labs(x = "Number of cells expressing a given repeat",
+       y = "Number of repeats") + theme_bw() 
+
+
+
+ggplot(molten, aes(value)) + geom_histogram(bins=9) + ylab("Number of expressed repeats") + xlab("Number of cells expressing a particular repeat")  + theme_bw() # + scale_x_continuous(breaks = 0:16, labels = 0:16) + ggtitle("Repea") + 
+# lets look at all L1s expressed in many cells 
+sum(molten$value > 50) # there are 38 expressed in 50/386 cells
+
+add_genes <- molten
+add_genes$repeats <-rownames(molten)
+maajor_L1s <- add_genes[add_genes$value >100,]
+
+# get annotations, there is a 1 bp difference 
+new_annotations <- readRDS("/Users/francescorivetti/Downloads/mouse_TE_age_filtered.rds")
+
+# get start sub_chr <- function(string) {
+  a <- str_extract(string, "(.*?)(?=_chr)")
+  return(a)
+}
+
+ pos <- c(26585413,
+ 58499096,
+ 27812547,
+ 119187946,
+ 56941541,
+ 79723723,
+ 80805871,
+ 18549460,
+ 91096648,
+ 83065751,
+ 40069388,
+ 41873051,
+ 98838508,
+ 126486246,
+ 188335790 ,
+ 6299058,
+ 93013302,
+ 88726177,
+1137322086,
+86127946,
+15191477 ,
+1067209241,
+15944125  ,
+80813898 ,
+22731237,
+31775678 ,
+116605234,
+94048883,
+84467666,
+126402933,
+1170881881,
+93209029,
+117087184,
+21254673 ,
+147093579)
+ 
+ 22000000 #ch2
+ 
+maj_L1_anno <- new_annotations[new_annotations$start_position %in% pos,]
+
+#which are missing?
+pos[!pos %in% maj_L1_anno$start_position]
+
+# "L1MC1_chr13_113732208-113732347 
+# L1Md_A_chr14_106720926-106727742
+#  L1Md_F_chrX_117088188-117089202 # 117088187
+
+# all are not novel - fix code
+# check all LINEs, any new?
+
+
+
+
+#######################################################################################
+####### how many repeats per cell
+L1_sce_corr <- subset(sce_corr, grepl("^L1", rownames(sce_corr)))
+
+extracted_table <- data.frame(counts(L1_sce_corr))
+# extracted_table$genes <- rownames(L1_sce_corr)
+# get number of repeats per cell
+table_binary <- apply(ifelse(extracted_table > 0, 1, 0), 2, sum)
+
+# melt
+melt_binary <- melt(table_binary)
+
+ggplot(melt_binary, aes(y=value, x='Dataset_2'))  +geom_boxplot(fill="#1f7b1c")  + ylab("Number of LINE-1 repeats expressed per cell") + theme_bw()   +xlab(NULL)
+
+```
+
+```{r L1 fams analysis }
+library(stringr)
+L1_sce_corr <- subset(sce_corr, grepl("^L1", rownames(sce_corr)))
+
+# subset a string till you find _chr
+sub_chr <- function(string) {
+  a <- str_extract(string, "(.*?)(?=_chr)")
+  return(a)
+}
+# exp_L1_fams <- unique(lapply(exp_L1s, sub_chr))
+# separate previous dataframe by fam
+molten$fam <- lapply(rownames(molten), sub_chr)
+df <- data.frame(
+  Family = unlist(molten$fam),
+  value = molten$value)
+
+df$percentage <- molten$value/ncol(L1_sce_corr) * 100
+  
+ggplot(df, aes(x=Family, y=value)) +geom_boxplot() 
+
+###### too many families, get ones that are on average expressed in 10% of cells
+df_by_fam <- df %>%
+  group_by(Family) %>%
+  filter(n() > 1) %>%
+  summarize(mean_value = mean(percentage)) %>% 
+  filter(mean_value >=  5.9)
+
+fam_of_interest <- df_by_fam$Family
+length(fam_of_interest)
+
+df_fam_of_interest <- df[df$Family %in% fam_of_interest,]
+ggplot(df_fam_of_interest, aes(x=Family, y=value)) +geom_boxplot(fill="#1f7b1c") +theme_bw() +ylab('Number of cells expressing a given repeat') + xlab('')
+
+# L1Md_F, L1Md_T
+insertion <- c( "L1Md_F", "L1Md_T")
+df_insertion <- molten[molten$fam %in% insertion,]
+ggplot(df_insertion, aes(x=value)) +geom_histogram() +theme_bw() 
+
+
+# L1Md_F, L1Md_T
+# L1MdA
+# L1MdF2
+# L1MdF3
+# L1MdF2
+# L1Md_T
+# L1Md_F, L1Md_T
+# L1MdF2
+# L1VL1, L1MdF2
+# L1Md_F, L1_Mus1
+# L1_Mus2
+#L1VL1, L1Md_F, L1Md_F3
+# L1VL1, L1_Mus1
+# L1_Mus3
+# Lx
+# L1_Mus1
+# L1_Mus2
+# L1_Mus3
+# L1_Mus4
+
+
+```
+
+
+## Closest families: L1Md_F, L1Md_T
+```{r  L1Md_F, L1Md_T}
+TEs <- c("L1Md_F" ,"L1Md_T" )
+sub_chr <- function(string) {
+  a <- str_extract(string, "(.*?)(?=_chr)")
+  return(a)
+}
+
+L1_sce_corr <- subset(sce_corr, grepl("^L1", rownames(sce_corr)))
+L1Md_F_sce_corr <- subset(sce_corr, grepl("^L1Md_F", rownames(sce_corr)))
+L1Md_T_sce_corr <- subset(sce_corr, grepl("^L1Md_T", rownames(sce_corr)))
+
+closest_sce_corr <- rbind(L1Md_F_sce_corr,L1Md_T_sce_corr)
+nrow(L1Md_F_sce_corr) + nrow(L1Md_T_sce_corr) == nrow(closest_sce_corr)
+
+# remove too lowly expressed genes
+closest_sce_corr <- closest_sce_corr[apply(counts(closest_sce_corr), 1, mean) > 0.1, ]
+
+####### FIX TOM
+#rownames(closest_sce_corr) <- paste( sub_chr(rownames(closest_sce_corr)), rowData(closest_sce_corr)$Chromosome, rowData(closest_sce_corr)$Start, sep='_')
+  
+
+
+extracted_table <- data.frame(assays(closest_sce_corr)$corrected)
+# cut down to 80 cells 
+extracted_table <- extracted_table[c(colnames(closest_sce_corr)[1:20], colnames(closest_sce_corr)[100:120])]
+extracted_table$genes <- rownames(closest_sce_corr)
+
+melt_data <- melt(extracted_table, id = c('genes'))
+############### heatmap 
+ggplot(melt_data, aes(variable, genes, fill=  value))  +   geom_tile(color = "black") + 
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000" , midpoint = 2.5) +
+  coord_fixed() + theme(legend.position='top') + ylab('L1Md-F and L1Md-T repeats') +xlab('Cells ') +   theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank()) 
+
+```
+
+
+
+## Reps per cell
+```{r  Reps per cell}
+
+L1_sce_corr <- subset(sce_corr, grepl("^L1", rownames(sce_corr)))
+
+
+```
+
+
+```{r QC plots}
+colData(unfiltered) <- cbind(colData(unfiltered), stats)
+unfiltered$discard <- qc$discard
+
+
+  plotColData(unfiltered, y="sum", 
+        colour_by="discard") + scale_y_log10() + ylab("Total counts") + theme(legend.position = "none") #+ geom_text(aes(label=colnames(unfiltered)))
+    plotColData(unfiltered, y="detected",  
+        colour_by="discard") + scale_y_log10() + ylab("Number of moleucles detected")  # + geom_text(aes(label=colnames(unfiltered)))
+
+        
+## Bar charts 
+extracted_table <- data.frame(assays(sce_corr)$corrected)
+extracted_table$genes <- rownames(sce_corr)
+extracted_table <- subset(extracted_table, row.names(extracted_table) %in% c('ENSMUSG00000012396', 'Sox2', 'ENSMUSG00000003032', 'Klf5', 'ENSMUSG00000024406', 'Tbx3'))
+extracted_table$genes <- c('Nanog', 'Klf4', 'Pou5f1')
+
+melt_data <- melt(extracted_table, id = c('genes'))
+
+# manually add outliers melt_data[melt_data$genes == 'Klf4',]
+ggplot(melt_data, aes(x= genes, y=value)) + 
+  geom_boxplot(fill="#9bd4ac")  + scale_y_continuous(trans = 'log2') + theme_bw() + ylab("Batch corrected gene expression log2(counts/size_factor)") + xlab(NULL)  +ylim(-1,8) 
+
+
+
+
+extracted_table <- data.frame(assays(sce_corr)$corrected)
+extracted_table$genes <- rownames(sce_corr)
+extracted_table <- subset(extracted_table, row.names(extracted_table) %in% c('ENSMUSG00000062327', 'ENSMUSG00000037025', 'ENSMUSG00000095139'))
+extracted_table$genes <- c('Brachyury')
+
+melt_data <- melt(extracted_table, id = c('genes'))
+
+# manually add outliers melt_data[melt_data$genes == 'Klf4',]
+ggplot(melt_data, aes(x= genes, y=value)) + 
+  geom_boxplot(fill="#9bd4ac")  + scale_y_continuous(trans = 'log2') + theme_bw() + ylab("Batch corrected gene expression log2(counts/size_factor)") + xlab(NULL)  +ylim(-1,8) 
+
+ggplot(melt_data, aes(x= genes, y=value)) + geom_point()  + scale_y_continuous(trans = 'log2') + theme_bw() + ylab("Batch corrected gene expression log2(counts/size_factor)") + xlab(NULL)  +ylim(-1,8) 
+```
+
+
+ggplot(melt_melt, aes(value, fill = variable)) + geom_histogram(position = "stack") + ylab("Number of expressed repeats") + xlab("Number of cells expressing a particular repeat")  + xlim(0,16) + theme_bw() # + scale_x_continuous(breaks = 0:16, labels = 0:16) + ggtitle("Repea")
+
+####### how many repeats per cell
+extracted_table <- data.frame(logcounts(sce_L1s))
+extracted_table$genes <- rownames(sce_L1s)
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+# get numebr of repeats per cell
+LINE_1_fam_binary <- apply(ifelse(LINE_1_insertion_df > 0, 1, 0), 2, sum)
+Control_fam_binary <- apply(ifelse(Control_df > 0, 2, 0), 2, sum)
+
+# melt
+melt_LINE_1 <- melt(LINE_1_fam_binary)
+melt_LINE_1$set_up <- 'Insertion'
+melt_Control <- melt(Control_fam_binary)
+melt_Control$set_up <- 'Control'
+melt_melt <- rbind(melt_Control, melt_LINE_1)
+
+ggplot(melt_melt, aes(value, fill = variable)) + geom_histogram(position = "stack") + ylab("Number of expressed repeats") + xlab("Number of cells expressing a particular repeat")  + xlim(0,16) + theme_bw() # + scale_x_continuous(breaks = 0:16, labels = 0:16) + ggtitle("Repea")
+
+ggplot(melt_melt, aes(rownames(melt_melt), value, fill=set_up)) +  geom_bar(stat='identity') + theme_bw()
+
+library(ggpubr)
+
+ggplot(melt_melt, aes(y=value, x=set_up, fill=set_up)) + geom_boxplot()  + stat_compare_means(method='wilcox.test') + ylab("Number of LINE-1 repeats expressed per cell") + theme_bw()
+
+
+##################################################
+# get numebr of repeats per cell
+sce_TEs <- sce_original[rowData(sce_original)$Class != "DNA" & rowData(sce_original)$Class != "Satellite" & rowData(sce_original)$Class != "Gene", ]
+
+unique(rowData(sce_TEs)$Class)
+# ALL LINEs 
+
+extracted_table <- data.frame(logcounts(sce_TEs))
+extracted_table$genes <- rownames(sce_TEs)
+LINE_1_insertion_df <- dplyr::select(extracted_table, LINE_1_insertion)
+Control_df <- dplyr::select(extracted_table, Control)
+
+LINE_1_fam_binary <- apply(ifelse(LINE_1_insertion_df > 0, 1, 0), 2, sum)
+Control_fam_binary <- apply(ifelse(Control_df > 0, 2, 0), 2, sum)
+
+# melt
+melt_LINE_1 <- melt(LINE_1_fam_binary)
+melt_LINE_1$set_up <- 'Insertion'
+
+```{r d}
+extracted_table <- data.frame(logcounts(sce_corr))
+
+extracted_table_bin <- apply(ifelse(extracted_table > 0, 1, 0), 2, sum)
+
+# melt
+melt_melt <- melt(extracted_table_bin)
+
+ggplot(melt_melt, aes(value)) + geom_histogram() + ylab("Number of expressed repeats") + xlab("Number of cells expressing a particular repeat")  + theme_bw() # + scale_x_continuous(breaks = 0:16, labels = 0:16) + ggtitle("Repea") + xlim(0,16)
+
+library(ggpubr)
+
+ggplot(melt_melt, aes(y=value)) + geom_boxplot() +  ylab("Number of LINE-1 repeats expressed per cell") + theme_bw()
+
+
+
+
+```
+### Mappability LINE-1s
+```{r Mappability LINE-1s}
+new_annotations <- readRDS("/Users/francescorivetti/Downloads/mouse_TE_age_filtered.rds")
+new_annotations_L1 <- new_annotations[new_annotations$repFamily == 'L1',]
+L1_sce_corr <- subset(sce_corr, grepl("^L1", rownames(sce_corr)))
+L1_sce_corr_exp <- data.frame(reps = rownames(L1_sce_corr[data.frame(apply(counts(L1_sce_corr), 1, max))[,1] >0,]))
+
+
+column_names <- c("name", "chr", "start", "end")
+anno_l1 <- data.frame(matrix(nrow = 0, ncol = length(column_names)))
+colnames(anno_l1) <- column_names
+
+for (rep in 1:nrow(L1_sce_corr_exp)){
+x <- substr((unlist(strsplit(sub(".*chr", "chr", L1_sce_corr_exp$reps[rep])
+, "_"))[1]), 4, nchar((unlist(strsplit(sub(".*chr", "chr", L1_sce_corr_exp$reps[rep])
+, "_"))[1])))
+x <- paste0('chr' , x)
+
+i <- unlist(strsplit((unlist(strsplit(sub(".*chr", "chr", L1_sce_corr_exp$reps[rep])
+, "_"))[2]), "-"))[1]
+
+f <- unlist(strsplit((unlist(strsplit(sub(".*chr", "chr", L1_sce_corr_exp$reps[rep])
+, "_"))[2]), "-"))[2]
+  
+res <- data.frame(name = L1_sce_corr_exp$reps[rep], chr =x, start =i , end =f)
+
+anno_l1<- rbind(res, anno_l1)
+}
+anno_l1$start <- as.numeric(anno_l1$start)
+
+min_one <- function(x) {
+  return(x-1)
+}
+
+anno_l1$start <- lapply(anno_l1$start, min_one)
+#anno_l1$end <- lapply(as.numeric(anno_l1$end), min_one)
+# remove scientic notation
+convert_to_normal_notation <- function(x) {
+  formatted_list <- lapply(x, function(num) {
+    format(num, scientific = FALSE)
+  })
+  return(formatted_list)
+}
+
+anno_l1$start <- convert_to_normal_notation(anno_l1$start)
+
+
+# now that they ahve been mapped, lets join with refernce
+
+# rename both  
+anno_l1$rep <- paste(anno_l1$chr, anno_l1$start, anno_l1$end, sep='_')
+new_annotations_L1$rep <- paste(new_annotations_L1$chromosome_name, new_annotations_L1$start_position, new_annotations_L1$end_position, sep='_')
+
+## inner join for exp and outer for not exp
+exp_L1s <- inner_join(anno_l1, new_annotations_L1, by='rep')
+# which ones did not map?
+missing <- anno_l1[!(anno_l1$name %in% exp_L1s$name.x), ]
+# none
+not_exp_L1s <- new_annotations_L1[!(new_annotations_L1$rep %in% anno_l1$rep), ]
+
+# make a new dataframe
+not_exp_L1s$det <- rep('Not detected', nrow(not_exp_L1s))
+exp_L1s$det <- rep('Detected', nrow(exp_L1s))
+
+not_exp_L1s_df <- not_exp_L1s %>%
+  dplyr::select(repFamily, mya, det) 
+
+exp_L1s_df <- exp_L1s %>%
+  dplyr::select(repFamily, mya, det) 
+
+df <- rbind(exp_L1s_df, not_exp_L1s_df)
+df$repFamily <- rep("LINE-1", nrow(df))
+#################################
+ggplot(df) + 
+  geom_freqpoly(aes(x=mya, color = as.factor(repFamily)), size= 1.5) +
+  geom_vline(xintercept=3, linetype="dashed", color = "black")+
+  scale_y_continuous(trans = 'log10') + 
+  scale_x_continuous(trans = 'log10') + 
+  scale_color_manual(values=c("#1f7b1c")) +
+  facet_grid(det~repFamily) + 
+  theme_classic(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+        strip.text = element_text(lineheight=10.0), 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 10),
+        legend.position = "NONE",
+        legend.direction = "vertical",
+        plot.margin = unit(c(0.5,0.5, 0.5, 0.5), "cm"),
+        strip.text.y.right = element_text(angle=90), legend.key.size = unit(0.2,"cm")) + 
+  labs(y="No. of repeats", x="Age (mya)")
+```
+
+
+### Mappability all
+```{r Mappability LINE-1s}
+new_annotations <- readRDS("/Users/francescorivetti/Downloads/mouse_TE_age_filtered.rds")
+
+reps_exp <- data.frame(reps = rownames(reps[data.frame(apply(counts(reps), 1, max))[,1] >0,]))
+
+column_names <- c("name", "chr", "start", "end")
+anno_l1 <- data.frame(matrix(nrow = 0, ncol = length(column_names)))
+colnames(anno_l1) <- column_names
+
+for (rep in 1:nrow(reps_exp)){
+x <- substr((unlist(strsplit(sub(".*chr", "chr", reps_exp$reps[rep])
+, "_"))[1]), 4, nchar((unlist(strsplit(sub(".*chr", "chr", reps_exp$reps[rep])
+, "_"))[1])))
+x <- paste0('chr' , x)
+
+i <- unlist(strsplit((unlist(strsplit(sub(".*chr", "chr", reps_exp$reps[rep])
+, "_"))[2]), "-"))[1]
+
+f <- unlist(strsplit((unlist(strsplit(sub(".*chr", "chr", reps_exp$reps[rep])
+, "_"))[2]), "-"))[2]
+  
+res <- data.frame(name = reps_exp$reps[rep], chr =x, start =i , end =f)
+
+anno_l1<- rbind(res, anno_l1)
+}
+anno_l1$start <- as.numeric(anno_l1$start)
+anno_l1 <- na.omit(anno_l1)
+
+min_one <- function(x) {
+  return(x-1)
+}
+
+anno_l1$start <- lapply(anno_l1$start, min_one)
+#anno_l1$end <- lapply(as.numeric(anno_l1$end), min_one)
+# remove scientic notation
+convert_to_normal_notation <- function(x) {
+  formatted_list <- lapply(x, function(num) {
+    format(num, scientific = FALSE)
+  })
+  return(formatted_list)
+}
+
+anno_l1$start <- convert_to_normal_notation(anno_l1$start)
+
+
+# now that they ahve been mapped, lets join with refernce
+
+# rename both  
+anno_l1$rep <- paste(anno_l1$chr, anno_l1$start, anno_l1$end, sep='_')
+new_annotations$rep <- paste(new_annotations$chromosome_name, new_annotations$start_position, new_annotations$end_position, sep='_')
+
+## inner join for exp and outer for not exp
+exp_L1s <- inner_join(anno_l1, new_annotations, by='rep')
+# which ones did not map?
+#missing <- anno_l1[!(anno_l1$name %in% exp_L1s$name.x), ]
+not_exp_L1s <- new_annotations[!(new_annotations$rep %in% exp_L1s$rep), ]
+
+# make a new dataframe
+not_exp_L1s$det <- rep('Not detected', nrow(not_exp_L1s))
+exp_L1s$det <- rep('Detected', nrow(exp_L1s))
+
+# only TEs
+TEs <- c("LINE", "SINE", "LTR")
+exp_TEs <- exp_L1s[exp_L1s$repClass %in% TEs,]
+not_exp_TEs <- not_exp_L1s[not_exp_L1s$repClass %in% TEs,]
+
+
+not_exp_L1s_df <- exp_TEs %>%
+  dplyr::select(repFamily, repClass, mya, det) 
+
+exp_L1s_df <- not_exp_TEs %>%
+  dplyr::select(repFamily, repClass, mya, det) 
+
+df <- rbind(exp_L1s_df, not_exp_L1s_df)
+klasses <- c('B2', 'B4', 'Deu', 'ERV1', 'ERVK', 'ERVL', 'ERVL-MaLR', 'Gypsy', 'ID', 'L1', 'L2' ,'LTR', 'MIR')
+df <- df[df$repFamily %in% klasses, ]
+
+#################################
+ggplot(df) + 
+  geom_freqpoly(aes(x=mya, color = as.factor(repFamily)), size= 1.5) +
+  geom_vline(xintercept=3, linetype="dashed", color = "black")+
+  scale_y_continuous(trans = 'log10') + 
+  scale_x_continuous(trans = 'log10') + 
+  scale_color_manual(values=c("#1f7b1c", "#c6e5c4", "#650084","#ebb8e1", "#a7009a","#ce53ba","#84008f", "#950095", "#001ba4", "#c6cbf4","#2a47ce", "#7687e6", "#2a47ce")) +
+  facet_grid(det~repClass) + 
+  theme_classic(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+        strip.text = element_text(lineheight=10.0), 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 10),
+        legend.position = "right",
+        legend.direction = "vertical",
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm"),
+        strip.text.y.right = element_text(angle=90), legend.key.size = unit(0.2,"cm")) + 
+  labs(y="No. of repeats", x="Age (mya)")
+```
