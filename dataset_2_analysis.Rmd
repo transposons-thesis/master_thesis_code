@@ -1,6 +1,6 @@
 ---
 title: "Error_kor"
-author: "F. Rivetti"
+author: "Student"
 date: "2023-07-09"
 output: html_document
 ---
