@@ -240,6 +240,9 @@ melt_binary <- melt(table_binary)
 
 ggplot(melt_binary, aes(y=value, x='Dataset_2'))  +geom_boxplot(fill="#1f7b1c")  + ylab("Number of LINE-1 repeats expressed per cell") + theme_bw()   +xlab(NULL)
 
+#analyse families 
+kruskal.test(value ~ fam, data = df_fam_of_interest)
+
 ```
 
 ```{r L1 fams analysis }
